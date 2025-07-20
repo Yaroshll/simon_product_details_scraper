@@ -1,4 +1,8 @@
-import { formatHandleFromUrl, extractPrice, calculatePrices } from "./formatter.js";
+import {
+  formatHandleFromUrl,
+  extractPrice,
+  calculatePrices,
+} from "./formatter.js";
 
 export async function extractProductData(page, urlObj) {
   const { url, tags } = urlObj;
@@ -6,60 +10,72 @@ export async function extractProductData(page, urlObj) {
 
   const handle = formatHandleFromUrl(url);
 
-  const title = await page.textContent('h1.product-single__title');
-  const priceText = await page.textContent('span.product__price--compare');
+  const title = await page.textContent("h1.product-single__title");
+  const priceText = await page.textContent("span.product__price--compare");
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
 
-  const option1Label = await page.textContent('label.variant__label');
-const option1Name = option1Label.split("\n")[0].trim();  // "Size"
-const option1Value = option1Label.match(/\((.*?)\)/)?.[1]?.trim() || "";  // "Adult - Women"
+  const option1Label = await page.textContent("label.variant__label");
+  const option1Name = option1Label.match(/^\s*(\w+)/)?.[1]?.trim() || ""; // Matches first word like "Size"
+  const option1Value = option1Label.match(/\((.*?)\)/)?.[1]?.trim() || "";
 
-  const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
-  const description = await page.textContent('.pdp-details-txt');
+  const description = await page.textContent(".pdp-details-txt");
 
   const images = [];
+  const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
 
-
-if (variantOptions.length === 1) {
-  // ✅ Only one color → extract all images
-  const color = await variantOptions[0].getAttribute("data-value");
-  const srcsets = await page.$$eval('.slick-track img', imgs =>
-    imgs.map(img => img.getAttribute("srcset"))
-  );
-
-  srcsets.forEach(srcset => {
-    const src = srcset?.split(",")[0]?.trim().split(" ")[0];
-    if (src) {
-      images.push({ handle, image: src, color });
-    }
-  });
-
-} else if (variantOptions.length > 1) {
-  // ✅ Multiple colors → click each label safely
-  for (const variant of variantOptions) {
-    const color = await variant.getAttribute("data-value");
-    const label = await variant.$("label");
-
-    if (label) {
-      try {
-        await label.click({ timeout: 2000 });  // ✅ Click the label if clickable
-        await page.waitForTimeout(1000);       // ✅ Wait for content to update
-      } catch (err) {
-        console.warn(`⚠️ Could not click color ${color} — skipped.`);
-      }
-    }
-
-    const src = await page.$eval('.slick-track img', img =>
-      img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+  if (variantOptions.length === 1) {
+    // ✅ Only one color → extract all images
+    const color = await variantOptions[0].getAttribute("data-value");
+    const srcsets = await page.$$eval(".slick-track img", (imgs) =>
+      imgs.map((img) => img.getAttribute("srcset"))
     );
 
-    if (src) {
-      images.push({ handle, image: src, color });
+    srcsets.forEach((srcset) => {
+      const src = srcset?.split(",")[0]?.trim().split(" ")[0];
+      if (src) {
+        images.push({ handle, image: src, color });
+      }
+    });
+  } else if (variantOptions.length > 1) {
+    for (let i = 0; i < variantOptions.length; i++) {
+      const variant = variantOptions[i];
+      const color = await variant.getAttribute("data-value");
+
+      if (i === 0) {
+        // ✅ First variant — don’t click, just extract main image
+        const src = await page.$eval(
+          ".slick-track img",
+          (img) =>
+            img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+        );
+
+        if (src) {
+          images.push({ handle, image: src, color });
+        }
+      } else {
+        const label = await variant.$("label");
+        if (label) {
+          try {
+            await label.click({ timeout: 2000 });
+            await page.waitForTimeout(1000);
+          } catch (err) {
+            console.warn(`⚠️ Could not click color ${color} — skipped.`);
+          }
+        }
+
+        const src = await page.$eval(
+          ".slick-track img",
+          (img) =>
+            img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+        );
+
+        if (src) {
+          images.push({ handle, image: src, color });
+        }
+      }
     }
   }
-}
-
 
   const productRow = {
     Handle: handle,
@@ -75,10 +91,10 @@ if (variantOptions.length === 1) {
     "Compare At Price": price.toFixed(2),
     "Cost per item": cost.toFixed(2),
     "Image Src": images[0]?.image || "",
-    "URL": url,
+    URL: url,
   };
 
-  const extraImageRows = images.slice(1).map(img => ({
+  const extraImageRows = images.slice(1).map((img) => ({
     Handle: handle,
     "Image Src": img.image,
   }));
