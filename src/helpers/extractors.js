@@ -148,16 +148,21 @@ export async function extractProductData(page, urlObj) {
 
             await labelLocator.click({ timeout: 5000 });
 
-            await page.waitForFunction(
-              (prev) => {
-                const img = document.querySelector(".slick-track img");
-                return (
-                  img && img.getAttribute("srcset")?.includes(prev) === false
-                );
-              },
-              previousSrc,
-              { timeout: 7000 }
-            );
+            // Wait for the main image to change after clicking the color variant
+            await page
+              .waitForFunction(
+                (prev) => {
+                  const img = document.querySelector(".slick-track img");
+                  return img && !img.getAttribute("srcset")?.includes(prev);
+                },
+                previousSrc,
+                { timeout: 7000 }
+              )
+              .catch(() =>
+                console.log(
+                  `⚠️ Image did not change after clicking color "${color}", trying to extract anyway...`
+                )
+              );
 
             console.log(`Clicked "${color}". Extracting image...`);
             const src = await extractMainImageSrc(page);
@@ -168,7 +173,7 @@ export async function extractProductData(page, urlObj) {
               savedImages.add(src);
             } else {
               console.log(
-                `⚠️ Image for color "${color}" already saved or not found.`
+                `⚠️ Image for color "${color}" is duplicate or not found.`
               );
             }
           } catch (err) {
