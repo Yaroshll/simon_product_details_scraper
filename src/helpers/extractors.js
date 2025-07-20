@@ -56,7 +56,7 @@ if (variantOptions.length === 1) {
       }
 
     } else {
-      const label = await variant.$("label");
+      const label = await variant.$("label.variant__button-label");
       if (label) {
         try {
           await label.click({ timeout: 3000 });
