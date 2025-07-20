@@ -26,13 +26,12 @@ const images = [];
 const savedImages = new Set();
 
 if (variantOptions.length === 1) {
-  // ✅ Only one color variant — save all images for it
+  // Single color variant case
   const color = await variantOptions[0].getAttribute("data-value");
-
   const srcsets = await page.$$eval('.slick-track img', imgs =>
     imgs.map(img => img.getAttribute("srcset"))
   );
-
+  
   srcsets.forEach(srcset => {
     const src = srcset?.split(",")[0]?.trim().split(" ")[0];
     if (src && !savedImages.has(src)) {
@@ -40,47 +39,37 @@ if (variantOptions.length === 1) {
       savedImages.add(src);
     }
   });
-
 } else if (variantOptions.length > 1) {
   for (let i = 0; i < variantOptions.length; i++) {
     const variant = variantOptions[i];
     const color = await variant.getAttribute("data-value");
 
-    const input = await variant.$('input[type="radio"]');
-    const isChecked = await input?.getProperty('checked').then(prop => prop.jsonValue());
-
-    if (isChecked) {
-      // ✅ This variant is already selected — save its main image without clicking
-      const src = await page.$eval('.slick-track img', img =>
-        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-      );
-
-      if (src && !savedImages.has(src)) {
-        images.push({ handle, image: src, color });
-        savedImages.add(src);
-      }
-
-    } else {
-      // ✅ This variant is not selected — click its label and save the main image after
+    try {
+      // Click the variant (whether it's checked or not - more reliable)
       const label = await variant.$('label.variant__button-label');
       if (label) {
-        try {
-          await label.click({ timeout: 3000 });
-          await page.waitForTimeout(1500);
+        await label.click();
+        
+        // Wait for any potential image changes
+        await page.waitForTimeout(1000);
+        await page.waitForFunction(() => {
+          const img = document.querySelector('.slick-track img');
+          return img && img.complete;
+        }, { timeout: 5000 });
+        
+        // Get the main image
+        const src = await page.$eval('.slick-track img', img => {
+          const srcset = img.getAttribute("srcset");
+          return srcset ? srcset.split(",")[0].trim().split(" ")[0] : null;
+        });
 
-          const src = await page.$eval('.slick-track img', img =>
-            img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-          );
-
-          if (src && !savedImages.has(src)) {
-            images.push({ handle, image: src, color });
-            savedImages.add(src);
-          }
-
-        } catch (err) {
-          console.warn(`⚠️ Could not click color ${color} — skipped.`);
+        if (src && !savedImages.has(src)) {
+          images.push({ handle, image: src, color });
+          savedImages.add(src);
         }
       }
+    } catch (err) {
+      console.warn(`⚠️ Could not process color ${color} — skipped. Error: ${err.message}`);
     }
   }
 }
