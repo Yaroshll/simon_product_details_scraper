@@ -21,63 +21,124 @@ export async function extractProductData(page, urlObj) {
 
   const description = await page.textContent(".pdp-details-txt");
 
-const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
+// Assume 'page' and 'handle' are already defined and the page is loaded.
+
 const images = [];
 const savedImages = new Set();
 
-if (variantOptions.length === 1) {
-  // Single color variant case
-  const color = await variantOptions[0].getAttribute("data-value");
-  const srcsets = await page.$$eval('.slick-track img', imgs =>
-    imgs.map(img => img.getAttribute("srcset"))
-  );
-  
-  srcsets.forEach(srcset => {
-    const src = srcset?.split(",")[0]?.trim().split(" ")[0];
-    if (src && !savedImages.has(src)) {
-      images.push({ handle, image: src, color });
-      savedImages.add(src);
-    }
-  });
-} else if (variantOptions.length > 1) {
-  for (let i = 0; i < variantOptions.length; i++) {
-    const variant = variantOptions[i];
-    const color = await variant.getAttribute("data-value");
-
-    try {
-      const label = await variant.$('label.variant__button-label');
-      if (label) {
-        // Click the color variant
-        await label.click();
-        
-        // 1. Wait for the color variant to actually be selected
-        await page.waitForFunction((expectedColor) => {
-          const selected = document.querySelector('.variant-input input[type="radio"]:checked');
-          return selected && selected.value === expectedColor;
-        }, {}, color);
-        
-        // 2. Wait for the image to be visible (you might need to adjust the selector)
-        await page.waitForSelector('.slick-track img', { visible: true, timeout: 5000 });
-        
-        // 3. Additional short wait to ensure image is loaded
-        await page.waitForTimeout(1000);
-        
-        // Get the main image
-        const src = await page.$eval('.slick-track img', img => {
-          const srcset = img.getAttribute("srcset");
-          return srcset ? srcset.split(",")[0].trim().split(" ")[0] : null;
-        });
-
-        if (src && !savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-          savedImages.add(src);
-        }
-      }
-    } catch (err) {
-      console.warn(`⚠️ Could not process color ${color} — skipped. Error: ${err.message}`);
-    }
+// Function to extract image src from srcset
+async function extractMainImageSrc(page) {
+  try {
+    // Wait for the main image to be visible
+    await page.waitForSelector('.slick-track img', { state: 'visible', timeout: 5000 });
+    const src = await page.$eval('.slick-track img', img =>
+      img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+    );
+    return src;
+  } catch (e) {
+    console.warn("⚠️ Could not extract main image source after variant change:", e.message);
+    return null;
   }
 }
+
+// 1. Get all color variant containers
+// We need to re-fetch these each time we iterate if we click.
+// However, for the initial loop, we can fetch once, then re-fetch
+// only the specific element to click. Let's simplify and re-fetch the list
+// within the loop if a click occurred, or simply by mapping properties.
+
+// First, identify the parent container for color variants
+const colorFieldset = await page.$('fieldset[name="Color"]');
+if (!colorFieldset) {
+  console.log("No 'Color' fieldset found on the page. Skipping color image extraction.");
+  // Handle cases with no color variants, e.g., proceed directly to other extractions or return.
+} else {
+    // Get all variant input elements within the fieldset.
+    // We will get their data-value and then try to click them.
+    const initialVariantInputs = await colorFieldset.$$('.variant-input');
+    const variantDetails = [];
+
+    // Map initial details without holding onto stale ElementHandles for clicking
+    for (const inputDiv of initialVariantInputs) {
+        const value = await inputDiv.getAttribute("data-value");
+        const inputElement = await inputDiv.$('input[type="radio"]');
+        const isChecked = await inputElement?.evaluate(el => el.checked);
+        const labelElement = await inputDiv.$('label.variant__button-label');
+
+        if (value && labelElement) {
+            variantDetails.push({
+                value: value,
+                isChecked: isChecked,
+                labelLocator: page.locator(`label.variant__button-label[for="${await labelElement.getAttribute('for')}"]`) // Get a Locator for future clicking
+            });
+        }
+    }
+
+    if (variantDetails.length === 0) {
+        console.log("No color variants found within the fieldset.");
+    } else if (variantDetails.length === 1) {
+        // ✅ Only one color variant — save all images for it from the slick-track
+        const color = variantDetails[0].value;
+        console.log(`Only one color variant found: ${color}. Extracting all images.`);
+
+        const srcsets = await page.$$eval('.slick-track img', imgs =>
+            imgs.map(img => img.getAttribute("srcset"))
+        );
+
+        srcsets.forEach(srcset => {
+            const src = srcset?.split(",")[0]?.trim().split(" ")[0];
+            if (src && !savedImages.has(src)) {
+                images.push({ handle, image: src, color });
+                savedImages.add(src);
+            }
+        });
+    } else { // variantDetails.length > 1
+        console.log(`${variantDetails.length} color variants found. Iterating through them.`);
+
+        // Prioritize the currently selected variant first, then others.
+        const orderedVariantDetails = variantDetails.sort((a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0));
+
+        for (const variant of orderedVariantDetails) {
+            const color = variant.value;
+            const labelLocator = variant.labelLocator; // Use the Locator
+
+            // Check if the variant is already the active one
+            // We use a separate check because the `isChecked` from `variantDetails` might be stale
+            const currentVariantInput = await page.locator(`input[name="Color"][value="${color}"]`).elementHandle();
+            const currentlyChecked = await currentVariantInput?.evaluate(el => el.checked);
+
+            if (currentlyChecked) {
+                console.log(`Color "${color}" is currently selected. Extracting image.`);
+                const src = await extractMainImageSrc(page);
+                if (src && !savedImages.has(src)) {
+                    images.push({ handle, image: src, color });
+                    savedImages.add(src);
+                }
+            } else {
+                // This variant is not selected — click its label and save the main image after
+                console.log(`Clicking color "${color}"...`);
+                try {
+                    await labelLocator.click({ timeout: 5000 }); // Use Locator for click
+                    await page.waitForTimeout(2000); // Increased wait for image change
+                    console.log(`Clicked "${color}". Extracting image.`);
+
+                    const src = await extractMainImageSrc(page);
+                    if (src && !savedImages.has(src)) {
+                        images.push({ handle, image: src, color });
+                        savedImages.add(src);
+                    }
+                } catch (err) {
+                    console.warn(`⚠️ Could not click color "${color}" — skipped. Error: ${err.message}`);
+                    // Optionally, you might want to log more details about the error
+                }
+            }
+        }
+    }
+}
+
+console.log(`Finished image extraction. Total unique images saved: ${images.length}`);
+// 'images' array now contains objects like { handle, image, color }
+// You can now process this 'images' array to save to your desired output.
 
 
   const productRow = {
