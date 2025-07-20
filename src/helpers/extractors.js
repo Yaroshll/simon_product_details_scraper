@@ -25,43 +25,61 @@ const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
 const images = [];
 const savedImages = new Set();
 
-for (const variant of variantOptions) {
-  const color = await variant.getAttribute("data-value");
+if (variantOptions.length === 1) {
+  // ✅ Only one color variant — save all images for it
+  const color = await variantOptions[0].getAttribute("data-value");
 
-  // Find the input inside the variant div and check if it's selected (checked)
-  const input = await variant.$('input[type="radio"]');
-  const isChecked = await input?.getProperty('checked').then(prop => prop.jsonValue());
+  const srcsets = await page.$$eval('.slick-track img', imgs =>
+    imgs.map(img => img.getAttribute("srcset"))
+  );
 
-  if (isChecked) {
-    // ✅ If this variant is already selected — save its main image without clicking
-    const src = await page.$eval('.slick-track img', img =>
-      img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-    );
-
+  srcsets.forEach(srcset => {
+    const src = srcset?.split(",")[0]?.trim().split(" ")[0];
     if (src && !savedImages.has(src)) {
       images.push({ handle, image: src, color });
       savedImages.add(src);
     }
+  });
 
-  } else {
-    // ✅ If this variant is NOT selected — click its label and then save the main image
-    const label = await variant.$('label.variant__button-label');
-    if (label) {
-      try {
-        await label.click({ timeout: 3000 });   // Click to select the color
-        await page.waitForTimeout(1500);        // Wait for the images to update
+} else if (variantOptions.length > 1) {
+  for (let i = 0; i < variantOptions.length; i++) {
+    const variant = variantOptions[i];
+    const color = await variant.getAttribute("data-value");
 
-        const src = await page.$eval('.slick-track img', img =>
-          img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-        );
+    const input = await variant.$('input[type="radio"]');
+    const isChecked = await input?.getProperty('checked').then(prop => prop.jsonValue());
 
-        if (src && !savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-          savedImages.add(src);
+    if (isChecked) {
+      // ✅ This variant is already selected — save its main image without clicking
+      const src = await page.$eval('.slick-track img', img =>
+        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+      );
+
+      if (src && !savedImages.has(src)) {
+        images.push({ handle, image: src, color });
+        savedImages.add(src);
+      }
+
+    } else {
+      // ✅ This variant is not selected — click its label and save the main image after
+      const label = await variant.$('label.variant__button-label');
+      if (label) {
+        try {
+          await label.click({ timeout: 3000 });
+          await page.waitForTimeout(1500);
+
+          const src = await page.$eval('.slick-track img', img =>
+            img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+          );
+
+          if (src && !savedImages.has(src)) {
+            images.push({ handle, image: src, color });
+            savedImages.add(src);
+          }
+
+        } catch (err) {
+          console.warn(`⚠️ Could not click color ${color} — skipped.`);
         }
-
-      } catch (err) {
-        console.warn(`⚠️ Could not click color ${color} — skipped.`);
       }
     }
   }
