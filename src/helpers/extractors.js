@@ -25,58 +25,48 @@ const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
 const images = [];
 const savedImages = new Set();
 
-if (variantOptions.length === 1) {
-  const color = await variantOptions[0].getAttribute("data-value");
+for (const variant of variantOptions) {
+  const color = await variant.getAttribute("data-value");
 
-  const srcsets = await page.$$eval('.slick-track img', imgs =>
-    imgs.map(img => img.getAttribute("srcset"))
-  );
+  // Find the input inside the variant div and check if it's selected (checked)
+  const input = await variant.$('input[type="radio"]');
+  const isChecked = await input?.getProperty('checked').then(prop => prop.jsonValue());
 
-  srcsets.forEach(srcset => {
-    const src = srcset?.split(",")[0]?.trim().split(" ")[0];
+  if (isChecked) {
+    // ✅ If this variant is already selected — save its main image without clicking
+    const src = await page.$eval('.slick-track img', img =>
+      img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+    );
+
     if (src && !savedImages.has(src)) {
       images.push({ handle, image: src, color });
       savedImages.add(src);
     }
-  });
 
-} else if (variantOptions.length > 1) {
-  for (let i = 0; i < variantOptions.length; i++) {
-    const variant = variantOptions[i];
-    const color = await variant.getAttribute("data-value");
+  } else {
+    // ✅ If this variant is NOT selected — click its label and then save the main image
+    const label = await variant.$('label.variant__button-label');
+    if (label) {
+      try {
+        await label.click({ timeout: 3000 });   // Click to select the color
+        await page.waitForTimeout(1500);        // Wait for the images to update
 
-    if (i === 0) {
-      const src = await page.$eval('.slick-track img', img =>
-        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-      );
+        const src = await page.$eval('.slick-track img', img =>
+          img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+        );
 
-      if (src && !savedImages.has(src)) {
-        images.push({ handle, image: src, color });
-        savedImages.add(src);
-      }
-
-    } else {
-      const label = await variant.$("label.variant__button-label");
-      if (label) {
-        try {
-          await label.click({ timeout: 3000 });
-          await page.waitForTimeout(1500);
-        } catch (err) {
-          console.warn(`⚠️ Could not click color ${color} — skipped.`);
+        if (src && !savedImages.has(src)) {
+          images.push({ handle, image: src, color });
+          savedImages.add(src);
         }
-      }
 
-      const src = await page.$eval('.slick-track img', img =>
-        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-      );
-
-      if (src && !savedImages.has(src)) {
-        images.push({ handle, image: src, color });
-        savedImages.add(src);
+      } catch (err) {
+        console.warn(`⚠️ Could not click color ${color} — skipped.`);
       }
     }
   }
 }
+
 
 
   const productRow = {
