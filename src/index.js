@@ -4,7 +4,11 @@ import { saveToExcel } from "./helpers/excelWriter.js";
 
 const urls = [
   {
-    url: "https://shop.simon.com/products/coach-outlet-carmen-mini-crossbody-bag-1?crpid=8585170157628&variant=43252539523132",
+    url: "https://shop.simon.com/products/coach-outlet-carmen-mini-crossbody-bag-1",
+    tags: "",
+  },
+  {
+    url: "https://shop.simon.com/products/coach-outlet-hailey-flap-bag-in-sketch-signature-canvas",
     tags: "",
   },
 ];
