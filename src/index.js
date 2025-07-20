@@ -11,6 +11,10 @@ const urls = [
     url: "https://shop.simon.com/products/coach-outlet-hailey-flap-bag-in-sketch-signature-canvas",
     tags: "",
   },
+  {
+    url: "https://shop.simon.com/products/coach-outlet-mini-rowan-crossbody-bag-with-charms?crpid=8585358704700",
+    tags: "",
+  },
 ];
 
 const allData = [];

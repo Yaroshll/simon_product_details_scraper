@@ -21,61 +21,63 @@ export async function extractProductData(page, urlObj) {
 
   const description = await page.textContent(".pdp-details-txt");
 
-  const images = [];
-  const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
+const variantOptions = await page.$$('fieldset[name="Color"] .variant-input');
+const images = [];
+const savedImages = new Set();
 
-  if (variantOptions.length === 1) {
-    // ✅ Only one color → extract all images
-    const color = await variantOptions[0].getAttribute("data-value");
-    const srcsets = await page.$$eval(".slick-track img", (imgs) =>
-      imgs.map((img) => img.getAttribute("srcset"))
-    );
+if (variantOptions.length === 1) {
+  const color = await variantOptions[0].getAttribute("data-value");
 
-    srcsets.forEach((srcset) => {
-      const src = srcset?.split(",")[0]?.trim().split(" ")[0];
-      if (src) {
+  const srcsets = await page.$$eval('.slick-track img', imgs =>
+    imgs.map(img => img.getAttribute("srcset"))
+  );
+
+  srcsets.forEach(srcset => {
+    const src = srcset?.split(",")[0]?.trim().split(" ")[0];
+    if (src && !savedImages.has(src)) {
+      images.push({ handle, image: src, color });
+      savedImages.add(src);
+    }
+  });
+
+} else if (variantOptions.length > 1) {
+  for (let i = 0; i < variantOptions.length; i++) {
+    const variant = variantOptions[i];
+    const color = await variant.getAttribute("data-value");
+
+    if (i === 0) {
+      const src = await page.$eval('.slick-track img', img =>
+        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+      );
+
+      if (src && !savedImages.has(src)) {
         images.push({ handle, image: src, color });
+        savedImages.add(src);
       }
-    });
-  } else if (variantOptions.length > 1) {
-    for (let i = 0; i < variantOptions.length; i++) {
-      const variant = variantOptions[i];
-      const color = await variant.getAttribute("data-value");
 
-      if (i === 0) {
-        // ✅ First variant — don’t click, just extract main image
-        const src = await page.$eval(
-          ".slick-track img",
-          (img) =>
-            img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-        );
-
-        if (src) {
-          images.push({ handle, image: src, color });
+    } else {
+      const label = await variant.$("label");
+      if (label) {
+        try {
+          await label.click({ timeout: 3000 });
+          await page.waitForTimeout(1500);
+        } catch (err) {
+          console.warn(`⚠️ Could not click color ${color} — skipped.`);
         }
-      } else {
-        const label = await variant.$("label");
-        if (label) {
-          try {
-            await label.click({ timeout: 2000 });
-            await page.waitForTimeout(1000);
-          } catch (err) {
-            console.warn(`⚠️ Could not click color ${color} — skipped.`);
-          }
-        }
+      }
 
-        const src = await page.$eval(
-          ".slick-track img",
-          (img) =>
-            img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-        );
+      const src = await page.$eval('.slick-track img', img =>
+        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
+      );
 
-        if (src) {
-          images.push({ handle, image: src, color });
-        }
+      if (src && !savedImages.has(src)) {
+        images.push({ handle, image: src, color });
+        savedImages.add(src);
       }
     }
   }
+}
+
 
   const productRow = {
     Handle: handle,
