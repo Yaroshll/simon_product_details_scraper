@@ -141,45 +141,41 @@ console.log(`Finished image extraction. Total unique images saved: ${images.leng
 // You can now process this 'images' array to save to your desired output.
 
 
- const data = [];
 
-  // ✅ 1. Main Product Row with first image & first color (if any)
-  data.push({
-    Handle: handle,
-    Title: title.trim(),
-    "Body (HTML)": description.trim(),
-    Tags: tags,
-    "Option1 Name": option1Name,
-    "Option1 Value": option1Value,
-    "Option2 Name": "Color",
-    "Option2 Value": images[0]?.color || "",
-    "Variant SKU": "",
-    "Variant Price": variantPrice.toFixed(2),
-    "Compare At Price": price.toFixed(2),
-    "Cost per item": cost.toFixed(2),
-    "Image Src": images[0]?.image || "",
-    "Product URL": url,
-  });
-
+const mainRow = {
+  Handle: handle,
+  Title: title.trim(),
+  "Body (HTML)": description.trim(),
+  Tags: tags,
+  "Option1 Name": option1Name,
+  "Option1 Value": option1Value,
+  "Option2 Name": "Color",
+  "Option2 Value": images[0]?.color || "",
+  "Variant SKU": "",
+  "Variant Price": variantPrice.toFixed(2),
+  "Compare At Price": price.toFixed(2),
+  "Cost per item": cost.toFixed(2),
+  "Image Src": images[0]?.image || "",
+  "Product URL": url,
+};
+ 
   // ✅ 2. Extra Images Rows with Option2 Value filled for each image
-  for (const img of images.slice(1)) {
-    data.push({
-      Handle: handle,
-      Title: "",
-      "Body (HTML)": "",
-      Tags: "",
-      "Option1 Name": "",
-      "Option1 Value": "",
-      "Option2 Name": "Color",
-      "Option2 Value": img.color,
-      "Variant SKU": "",
-      "Variant Price": "",
-      "Compare At Price": "",
-      "Cost per item": "",
-      "Image Src": img.image,
-      "Product URL": "",
-    });
-  }
+  const extraImageRows = images.slice(1).map((img) => ({
+  Handle: handle,
+  Title: "",
+  "Body (HTML)": "",
+  Tags: "",
+  "Option1 Name": "",
+  "Option1 Value": "",
+  "Option2 Name": "Color",
+  "Option2 Value": img.color,
+  "Variant SKU": "",
+  "Variant Price": "",
+  "Compare At Price": "",
+  "Cost per item": "",
+  "Image Src": img.image,
+  "Product URL": "",
+}));
 
-  return data;
+return [mainRow, ...extraImageRows];
 }

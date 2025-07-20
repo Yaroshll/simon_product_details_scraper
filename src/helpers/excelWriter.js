@@ -18,7 +18,8 @@ export function saveToExcel(data) {
   }
 
   const wb = xlsx.utils.book_new();
-  const ws = xlsx.utils.json_to_sheet(data);
+const ws = xlsx.utils.json_to_sheet(data, { skipHeader: false });
+
   xlsx.utils.book_append_sheet(wb, ws, "Products");
   xlsx.writeFile(wb, filename);
 
