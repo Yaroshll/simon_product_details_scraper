@@ -141,7 +141,10 @@ console.log(`Finished image extraction. Total unique images saved: ${images.leng
 // You can now process this 'images' array to save to your desired output.
 
 
-  const productRow = {
+ const data = [];
+
+  // ✅ 1. Main Product Row with first image & first color (if any)
+  data.push({
     Handle: handle,
     Title: title.trim(),
     "Body (HTML)": description.trim(),
@@ -155,13 +158,28 @@ console.log(`Finished image extraction. Total unique images saved: ${images.leng
     "Compare At Price": price.toFixed(2),
     "Cost per item": cost.toFixed(2),
     "Image Src": images[0]?.image || "",
-    URL: url,
-  };
+    "Product URL": url,
+  });
 
-  const extraImageRows = images.slice(1).map((img) => ({
-    Handle: handle,
-    "Image Src": img.image,
-  }));
+  // ✅ 2. Extra Images Rows with Option2 Value filled for each image
+  for (const img of images.slice(1)) {
+    data.push({
+      Handle: handle,
+      Title: "",
+      "Body (HTML)": "",
+      Tags: "",
+      "Option1 Name": "",
+      "Option1 Value": "",
+      "Option2 Name": "Color",
+      "Option2 Value": img.color,
+      "Variant SKU": "",
+      "Variant Price": "",
+      "Compare At Price": "",
+      "Cost per item": "",
+      "Image Src": img.image,
+      "Product URL": "",
+    });
+  }
 
-  return [productRow, ...extraImageRows];
+  return data;
 }
