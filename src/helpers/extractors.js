@@ -123,6 +123,7 @@ if (!colorFieldset) {
                     console.log(`Clicked "${color}". Extracting image.`);
 
                     const src = await extractMainImageSrc(page);
+                    console.log(`Extracted image for "${color}": ${src}`);
                     if (src && !savedImages.has(src)) {
                         images.push({ handle, image: src, color });
                         savedImages.add(src);
