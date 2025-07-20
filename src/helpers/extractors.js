@@ -45,17 +45,22 @@ if (variantOptions.length === 1) {
     const color = await variant.getAttribute("data-value");
 
     try {
-      // Click the variant (whether it's checked or not - more reliable)
       const label = await variant.$('label.variant__button-label');
       if (label) {
+        // Click the color variant
         await label.click();
         
-        // Wait for any potential image changes
+        // 1. Wait for the color variant to actually be selected
+        await page.waitForFunction((expectedColor) => {
+          const selected = document.querySelector('.variant-input input[type="radio"]:checked');
+          return selected && selected.value === expectedColor;
+        }, {}, color);
+        
+        // 2. Wait for the image to be visible (you might need to adjust the selector)
+        await page.waitForSelector('.slick-track img', { visible: true, timeout: 5000 });
+        
+        // 3. Additional short wait to ensure image is loaded
         await page.waitForTimeout(1000);
-        await page.waitForFunction(() => {
-          const img = document.querySelector('.slick-track img');
-          return img && img.complete;
-        }, { timeout: 5000 });
         
         // Get the main image
         const src = await page.$eval('.slick-track img', img => {
@@ -73,7 +78,6 @@ if (variantOptions.length === 1) {
     }
   }
 }
-
 
 
   const productRow = {
