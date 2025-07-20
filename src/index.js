@@ -23,15 +23,21 @@ const browser = await launchBrowser();
 const context = await browser.newContext();
 const page = await context.newPage();
 
-for (const urlObj of urls) {
+for (const [index, urlObj] of urls.entries()) {
   try {
+    console.log(`\n🔎 [${index + 1}/${urls.length}] Extracting: ${urlObj.url}`);
     const productRows = await extractProductData(page, urlObj);
     allData.push(...productRows);
+    console.log(`✅ Finished: ${urlObj.url} — Extracted ${productRows.length} rows.`);
   } catch (err) {
-    console.error(`❌ Error on ${urlObj.url}`, err);
+    console.error(`❌ Error extracting ${urlObj.url}`, err);
   }
 }
 
 await browser.close();
 
-saveToExcel(allData);
+if (allData.length > 0) {
+  saveToExcel(allData);
+} else {
+  console.warn("⚠️ No data extracted. Excel file was not created.");
+}
