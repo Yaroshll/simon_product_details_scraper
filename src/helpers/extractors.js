@@ -27,22 +27,26 @@ export async function extractProductData(page, urlObj) {
   const savedImages = new Set();
 
   // Function to extract image src from srcset
- async function extractMainImageSrc(page) {
-  try {
-    await page.waitForSelector('.pdp-main-img', { state: 'visible', timeout: 5000 });
+  async function extractMainImageSrc(page) {
+    try {
+      await page.waitForSelector(".pdp-main-img", {
+        state: "visible",
+        timeout: 5000,
+      });
 
-    const src = await page.$eval('.pdp-main-img', img =>
-      img.getAttribute('data-photoswipe-src')
-    );
+      const src = await page.$eval(".pdp-main-img", (img) =>
+        img.getAttribute("data-photoswipe-src")
+      );
 
-    return src;
-  } catch (e) {
-    console.warn("⚠️ Could not extract main image source after variant change:", e.message);
-    return null;
+      return src;
+    } catch (e) {
+      console.warn(
+        "⚠️ Could not extract main image source after variant change:",
+        e.message
+      );
+      return null;
+    }
   }
-}
-
-
 
   // 1. Get all color variant containers
   // We need to re-fetch these each time we iterate if we click.
@@ -92,17 +96,16 @@ export async function extractProductData(page, urlObj) {
         `Only one color variant found: ${color}. Extracting all images.`
       );
 
-      const mainImages = await page.$$eval('.pdp-main-img', imgs =>
-  imgs.map(img => img.getAttribute('data-photoswipe-src'))
-);
+      const mainImages = await page.$$eval(".pdp-main-img", (imgs) =>
+        imgs.map((img) => img.getAttribute("data-photoswipe-src"))
+      );
 
-mainImages.forEach(src => {
-  if (src && !savedImages.has(src)) {
-    images.push({ handle, image: src, color });
-    savedImages.add(src);
-  }
-});
-
+      mainImages.forEach((src) => {
+        if (src && !savedImages.has(src)) {
+          images.push({ handle, image: src, color });
+          savedImages.add(src);
+        }
+      });
     } else {
       // variantDetails.length > 1
       console.log(
@@ -140,16 +143,21 @@ mainImages.forEach(src => {
           // This variant is not selected — click its label and save the main image after
           console.log(`Clicking color "${color}"...`);
           try {
+            await labelLocator.click({ timeout: 5000 });
+
+            // Wait for the main image to change after clicking the color variant
             const previousSrc = await extractMainImageSrc(page);
 
             await labelLocator.click({ timeout: 5000 });
 
-            // Wait for the main image to change after clicking the color variant
             await page
               .waitForFunction(
                 (prev) => {
-                  const img = document.querySelector(".slick-track img");
-                  return img && !img.getAttribute("srcset")?.includes(prev);
+                  const img = document.querySelector(".pdp-main-img");
+                  return (
+                    img &&
+                    !img.getAttribute("data-photoswipe-src")?.includes(prev)
+                  );
                 },
                 previousSrc,
                 { timeout: 7000 }
@@ -164,12 +172,12 @@ mainImages.forEach(src => {
             const src = await extractMainImageSrc(page);
             console.log(`✅ Extracted image for "${color}": ${src}`);
 
-           if (src && !savedImages.has(src)) {
-  images.push({ handle, image: src, color });
-  savedImages.add(src);
-} else {
-  console.log(`⚠️ Image for "${color}" is duplicate or missing.`);
-}
+            if (src && !savedImages.has(src)) {
+              images.push({ handle, image: src, color });
+              savedImages.add(src);
+            } else {
+              console.log(`⚠️ Image for "${color}" is duplicate or missing.`);
+            }
           } catch (err) {
             console.warn(
               `⚠️ Could not click color "${color}" — skipped. Error: ${err.message}`
