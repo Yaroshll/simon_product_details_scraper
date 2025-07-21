@@ -16,38 +16,54 @@ export async function extractProductData(page, urlObj) {
   const { cost, variantPrice } = calculatePrices(price);
 
   const option1Label = await page.textContent("label.variant__label");
-  const option1Name = option1Label.match(/^\s*(\w+)/)?.[1]?.trim() || "";
+  const option1Name = option1Label.match(/^\s*(\w+)/)?.[1]?.trim() || ""; // Matches first word like "Size"
   const option1Value = option1Label.match(/\((.*?)\)/)?.[1]?.trim() || "";
 
   const description = await page.textContent(".pdp-details-txt");
 
+  // Assume 'page' and 'handle' are already defined and the page is loaded.
+
   const images = [];
   const savedImages = new Set();
 
-  // ✅ Corrected image extractor function
+  // Function to extract image src from srcset
   async function extractMainImageSrc(page) {
-    try {
-      await page.waitForSelector(".pdp-main-img", {
-        state: "visible",
-        timeout: 5000,
-      });
-      const src = await page.$eval(".pdp-main-img", (img) =>
-        img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]
-      );
-      return src;
-    } catch (e) {
-      console.warn("⚠️ Could not extract main image:", e.message);
-      return null;
-    }
+  try {
+    await page.waitForSelector(".pdp-main-img", {
+      state: "visible",
+      timeout: 5000,
+    });
+    const src = await page.$eval(".pdp-main-img", (img) =>
+      img.getAttribute("data-photoswipe-src")
+    );
+    return src;
+  } catch (e) {
+    console.warn("⚠️ Could not extract main image:", e.message);
+    return null;
   }
+}
 
+
+  // 1. Get all color variant containers
+  // We need to re-fetch these each time we iterate if we click.
+  // However, for the initial loop, we can fetch once, then re-fetch
+  // only the specific element to click. Let's simplify and re-fetch the list
+  // within the loop if a click occurred, or simply by mapping properties.
+
+  // First, identify the parent container for color variants
   const colorFieldset = await page.$('fieldset[name="Color"]');
   if (!colorFieldset) {
-    console.log("No 'Color' fieldset found. Skipping color image extraction.");
+    console.log(
+      "No 'Color' fieldset found on the page. Skipping color image extraction."
+    );
+    // Handle cases with no color variants, e.g., proceed directly to other extractions or return.
   } else {
+    // Get all variant input elements within the fieldset.
+    // We will get their data-value and then try to click them.
     const initialVariantInputs = await colorFieldset.$$(".variant-input");
     const variantDetails = [];
 
+    // Map initial details without holding onto stale ElementHandles for clicking
     for (const inputDiv of initialVariantInputs) {
       const value = await inputDiv.getAttribute("data-value");
       const inputElement = await inputDiv.$('input[type="radio"]');
@@ -56,24 +72,27 @@ export async function extractProductData(page, urlObj) {
 
       if (value && labelElement) {
         variantDetails.push({
-          value,
-          isChecked,
+          value: value,
+          isChecked: isChecked,
           labelLocator: page.locator(
             `label.variant__button-label[for="${await labelElement.getAttribute(
               "for"
             )}"]`
-          ),
+          ), // Get a Locator for future clicking
         });
       }
     }
 
     if (variantDetails.length === 0) {
-      console.log("No color variants found.");
+      console.log("No color variants found within the fieldset.");
     } else if (variantDetails.length === 1) {
+      // ✅ Only one color variant — save all images for it from the slick-track
       const color = variantDetails[0].value;
-      console.log(`Only one color variant: ${color}. Extracting all images.`);
+      console.log(
+        `Only one color variant found: ${color}. Extracting all images.`
+      );
 
-      const srcsets = await page.$$eval(".pdp-main-img", (imgs) =>
+      const srcsets = await page.$$eval(".slick-track img", (imgs) =>
         imgs.map((img) => img.getAttribute("srcset"))
       );
 
@@ -85,41 +104,51 @@ export async function extractProductData(page, urlObj) {
         }
       });
     } else {
-      console.log(`${variantDetails.length} color variants found.`);
+      // variantDetails.length > 1
+      console.log(
+        `${variantDetails.length} color variants found. Iterating through them.`
+      );
 
-      const orderedVariants = variantDetails.sort(
+      // Prioritize the currently selected variant first, then others.
+      const orderedVariantDetails = variantDetails.sort(
         (a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0)
       );
 
-      for (const variant of orderedVariants) {
+      for (const variant of orderedVariantDetails) {
         const color = variant.value;
-        const labelLocator = variant.labelLocator;
+        const labelLocator = variant.labelLocator; // Use the Locator
 
-        const currentInput = await page
+        // Check if the variant is already the active one
+        // We use a separate check because the `isChecked` from `variantDetails` might be stale
+        const currentVariantInput = await page
           .locator(`input[name="Color"][value="${color}"]`)
           .elementHandle();
-        const currentlyChecked = await currentInput?.evaluate(
+        const currentlyChecked = await currentVariantInput?.evaluate(
           (el) => el.checked
         );
 
         if (currentlyChecked) {
-          console.log(`Color "${color}" is selected. Extracting image.`);
+          console.log(
+            `Color "${color}" is currently selected. Extracting image.`
+          );
           const src = await extractMainImageSrc(page);
           if (src && !savedImages.has(src)) {
             images.push({ handle, image: src, color });
             savedImages.add(src);
           }
         } else {
+          // This variant is not selected — click its label and save the main image after
           console.log(`Clicking color "${color}"...`);
           try {
             const previousSrc = await extractMainImageSrc(page);
 
             await labelLocator.click({ timeout: 5000 });
 
+            // Wait for the main image to change after clicking the color variant
             await page
               .waitForFunction(
                 (prev) => {
-                  const img = document.querySelector(".pdp-main-img");
+                  const img = document.querySelector(".slick-track img");
                   return img && !img.getAttribute("srcset")?.includes(prev);
                 },
                 previousSrc,
@@ -127,23 +156,23 @@ export async function extractProductData(page, urlObj) {
               )
               .catch(() =>
                 console.log(
-                  `⚠️ Image did not change after clicking color "${color}". Trying anyway.`
+                  `⚠️ Image did not change after clicking color "${color}", trying to extract anyway...`
                 )
               );
 
-            console.log(`Extracting image for color "${color}"...`);
+            console.log(`Clicked "${color}". Extracting image...`);
             const src = await extractMainImageSrc(page);
             console.log(`✅ Extracted image for "${color}": ${src}`);
 
-            if (src && !savedImages.has(src)) {
-              images.push({ handle, image: src, color });
-              savedImages.add(src);
-            } else {
-              console.log(`⚠️ Image for "${color}" is duplicate or missing.`);
-            }
+           if (src && !savedImages.has(src)) {
+  images.push({ handle, image: src, color });
+  savedImages.add(src);
+} else {
+  console.log(`⚠️ Image for "${color}" is duplicate or missing.`);
+}
           } catch (err) {
             console.warn(
-              `⚠️ Could not click color "${color}". Skipped. Error: ${err.message}`
+              `⚠️ Could not click color "${color}" — skipped. Error: ${err.message}`
             );
           }
         }
@@ -152,8 +181,10 @@ export async function extractProductData(page, urlObj) {
   }
 
   console.log(
-    `Finished image extraction. Total unique images: ${images.length}`
+    `Finished image extraction. Total unique images saved: ${images.length}`
   );
+  // 'images' array now contains objects like { handle, image, color }
+  // You can now process this 'images' array to save to your desired output.
 
   const mainRow = {
     Handle: handle,
@@ -172,6 +203,7 @@ export async function extractProductData(page, urlObj) {
     "Product URL": url,
   };
 
+  // ✅ 2. Extra Images Rows with Option2 Value filled for each image
   const extraImageRows = images.slice(1).map((img) => ({
     Handle: handle,
     Title: "",
