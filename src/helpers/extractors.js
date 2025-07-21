@@ -40,13 +40,12 @@ export async function extractProductData(page, urlObj) {
   }
 
   const colorFieldset = await page.$('fieldset[name="Color"]');
-  if (!colorFieldset) {
-    console.log("No 'Color' fieldset found. Skipping color extraction.");
-  } else {
-    const initialVariantInputs = await colorFieldset.$$(".variant-input");
-    const variantDetails = [];
+  const variantDetails = [];
 
-    for (const inputDiv of initialVariantInputs) {
+  if (colorFieldset) {
+    const variantInputs = await colorFieldset.$$(".variant-input");
+
+    for (const inputDiv of variantInputs) {
       const value = await inputDiv.getAttribute("data-value");
       const inputElement = await inputDiv.$('input[type="radio"]');
       const isChecked = await inputElement?.evaluate((el) => el.checked);
@@ -54,8 +53,8 @@ export async function extractProductData(page, urlObj) {
 
       if (value && labelElement) {
         variantDetails.push({
-          value: value,
-          isChecked: isChecked,
+          value,
+          isChecked,
           labelLocator: page.locator(
             `label.variant__button-label[for="${await labelElement.getAttribute(
               "for"
@@ -64,73 +63,75 @@ export async function extractProductData(page, urlObj) {
         });
       }
     }
+  }
 
-    if (variantDetails.length === 0) {
-      console.log("No color variants found inside fieldset.");
-    } else if (variantDetails.length === 1) {
-      const color = variantDetails[0].value;
-      console.log(`One color variant: ${color}`);
-      const mainImages = await page.$$eval(".pdp-main-img", (imgs) =>
-        imgs.map((img) => img.getAttribute("data-photoswipe-src"))
-      );
-      mainImages.forEach((src) => {
+  if (variantDetails.length === 0) {
+    console.log("⚠️ No color variants found. Skipping color logic.");
+  } else if (variantDetails.length === 1) {
+    const color = variantDetails[0].value;
+    console.log(`✅ Single color variant: ${color}`);
+
+    const mainImages = await page.$$eval(".pdp-main-img", (imgs) =>
+      imgs.map((img) => img.getAttribute("data-photoswipe-src"))
+    );
+
+    mainImages.forEach((src) => {
+      if (src && !savedImages.has(src)) {
+        images.push({ handle, image: src, color });
+        savedImages.add(src);
+      }
+    });
+  } else {
+    console.log(`✅ Multiple color variants: ${variantDetails.length}`);
+    const sortedVariants = variantDetails.sort(
+      (a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0)
+    );
+
+    for (const variant of sortedVariants) {
+      const color = variant.value;
+      const labelLocator = variant.labelLocator;
+      const inputHandle = await page
+        .locator(`input[name="Color"][value="${color}"]`)
+        .elementHandle();
+      const currentlyChecked = await inputHandle?.evaluate((el) => el.checked);
+
+      if (currentlyChecked) {
+        const src = await extractMainImageSrc();
         if (src && !savedImages.has(src)) {
           images.push({ handle, image: src, color });
           savedImages.add(src);
         }
-      });
-    } else {
-      const orderedVariants = variantDetails.sort(
-        (a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0)
-      );
+      } else {
+        try {
+          await labelLocator.click({ timeout: 5000 });
 
-      for (const variant of orderedVariants) {
-        const color = variant.value;
-        const labelLocator = variant.labelLocator;
-        const currentVariantInput = await page
-          .locator(`input[name="Color"][value="${color}"]`)
-          .elementHandle();
-        const currentlyChecked = await currentVariantInput?.evaluate(
-          (el) => el.checked
-        );
+          const previousSrc = await extractMainImageSrc();
 
-        if (currentlyChecked) {
+          await page
+            .waitForFunction(
+              (prev) => {
+                const img = document.querySelector(".pdp-main-img");
+                return (
+                  img &&
+                  !img.getAttribute("data-photoswipe-src")?.includes(prev)
+                );
+              },
+              previousSrc,
+              { timeout: 7000 }
+            )
+            .catch(() =>
+              console.log(
+                `⚠️ Image did not change after selecting "${color}".`
+              )
+            );
+
           const src = await extractMainImageSrc();
           if (src && !savedImages.has(src)) {
             images.push({ handle, image: src, color });
             savedImages.add(src);
           }
-        } else {
-          try {
-            await labelLocator.click({ timeout: 5000 });
-            const previousSrc = await extractMainImageSrc();
-
-            await page
-              .waitForFunction(
-                (prev) => {
-                  const img = document.querySelector(".pdp-main-img");
-                  return (
-                    img &&
-                    !img.getAttribute("data-photoswipe-src")?.includes(prev)
-                  );
-                },
-                previousSrc,
-                { timeout: 7000 }
-              )
-              .catch(() =>
-                console.log(
-                  `⚠️ Image did not change after clicking color "${color}".`
-                )
-              );
-
-            const src = await extractMainImageSrc();
-            if (src && !savedImages.has(src)) {
-              images.push({ handle, image: src, color });
-              savedImages.add(src);
-            }
-          } catch (err) {
-            console.warn(`⚠️ Could not click color "${color}":`, err.message);
-          }
+        } catch (err) {
+          console.warn(`⚠️ Could not select color "${color}":`, err.message);
         }
       }
     }
@@ -152,7 +153,7 @@ export async function extractProductData(page, urlObj) {
     Tags: tags,
     "Option1 Name": option1Name,
     "Option1 Value": option1Value,
-    "Option2 Name": uniqueColors.length > 0 ? "Color" : "",
+    "Option2 Name": uniqueColors.length > 1 ? "Color" : "",
     "Option2 Value": uniqueColors[0] || "",
     "Variant Price": variantPrice.toFixed(2),
     "Compare At Price": price.toFixed(2),
@@ -167,27 +168,57 @@ export async function extractProductData(page, urlObj) {
     Published: "TRUE",
   };
 
-  const colorRows = uniqueColors.slice(1).map((color) => ({
-    Handle: handle,
-    Title: "",
-    "Body (HTML)": "",
-    Tags: "",
-    "Option1 Name": "",
-    "Option1 Value": "",
-    "Option2 Name": "Color",
-    "Option2 Value": color,
-    "Variant Price": "",
-    "Compare At Price": "",
-    "Cost per item": "",
-    "Image Src": colorImageMap.get(color) || "",
-    "product.metafields.custom.original_prodect_url": "",
-    "Variant Fulfillment Service": "",
-    "Variant Inventory Policy": "",
-    "Variant Inventory Tracker": "",
-    Type: "",
-    Vendor: "",
-    Published: "",
-  }));
+  const rows = [mainRow];
 
-  return [mainRow, ...colorRows];
+  if (uniqueColors.length > 1) {
+    const colorRows = uniqueColors.slice(1).map((color) => ({
+      Handle: handle,
+      Title: "",
+      "Body (HTML)": "",
+      Tags: "",
+      "Option1 Name": "",
+      "Option1 Value": "",
+      "Option2 Name": "Color",
+      "Option2 Value": color,
+      "Variant Price": "",
+      "Compare At Price": "",
+      "Cost per item": "",
+      "Image Src": colorImageMap.get(color) || "",
+      "product.metafields.custom.original_prodect_url": "",
+      "Variant Fulfillment Service": "",
+      "Variant Inventory Policy": "",
+      "Variant Inventory Tracker": "",
+      Type: "",
+      Vendor: "",
+      Published: "",
+    }));
+
+    rows.push(...colorRows);
+  } else {
+    const extraImages = images.slice(1).map((img) => ({
+      Handle: handle,
+      Title: "",
+      "Body (HTML)": "",
+      Tags: "",
+      "Option1 Name": "",
+      "Option1 Value": "",
+      "Option2 Name": "",
+      "Option2 Value": "",
+      "Variant Price": "",
+      "Compare At Price": "",
+      "Cost per item": "",
+      "Image Src": img.image,
+      "product.metafields.custom.original_prodect_url": "",
+      "Variant Fulfillment Service": "",
+      "Variant Inventory Policy": "",
+      "Variant Inventory Tracker": "",
+      Type: "",
+      Vendor: "",
+      Published: "",
+    }));
+
+    rows.push(...extraImages);
+  }
+
+  return rows;
 }
