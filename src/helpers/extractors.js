@@ -187,48 +187,57 @@ export async function extractProductData(page, urlObj) {
       }
     }
   }
+  // Collect unique colors with their first image
+const colorImageMap = new Map();
+images.forEach((img) => {
+  if (!colorImageMap.has(img.color)) {
+    colorImageMap.set(img.color, img.image);
+  }
+});
+const uniqueColors = [...colorImageMap.keys()];
 
   console.log(
     `Finished image extraction. Total unique images saved: ${images.length}`
   );
   // 'images' array now contains objects like { handle, image, color }
   // You can now process this 'images' array to save to your desired output.
+// ✅ 1. Additional Color Rows (skip the first color in uniqueColors)
+const colorRows = uniqueColors.slice(1).map((color) => ({
+  Handle: handle,
+  Title: "",
+  "Body (HTML)": "",
+  Tags: "",
+  "Option1 Name": "",
+  "Option1 Value": "",
+  "Option2 Name": "Color",
+  "Option2 Value": color,
+  "Variant Price": "",
+  "Compare At Price": "",
+  "Cost per item": "",
+  "Image Src": colorImageMap.get(color) || "",
+  "product.metafields.custom.original_prodect_url": "",
+  "Variant Fulfillment Service": "",
+  "Variant Inventory Policy": "",
+  "Variant Inventory Tracker": "",
+  Type: "",
+  Vendor: "",
+  Published: "",
+}));
 
-  const mainRow = {
-    Handle: handle,
-    Title: title.trim(),
-    "Body (HTML)": description.trim(),
-    Tags: tags,
-    "Option1 Name": option1Name,
-    "Option1 Value": option1Value,
-    "Option2 Name": images.length > 1 ? "Color" : "",
-    "Option2 Value": images.length > 1 ? images[0]?.color || "" : "",
-    //"Variant SKU": "",
-    "Variant Price": variantPrice.toFixed(2),
-    "Compare At Price": price.toFixed(2),
-    "Cost per item": cost.toFixed(2),
-    "Image Src": images[0]?.image || "",
-    "product.metafields.custom.original_prodect_url": url,
-    "Variant Fulfillment Service": "manual",
-    "Variant Inventory Policy": "deny",
-    "Variant Inventory Tracker": "shopify",
-    Type: "USA Products",
-    Vendor: "simon",
-  };
-
-  // ✅ 2. Extra Images Rows with Option2 Value filled for each image
-  const extraImageRows = images.slice(1).map((img) => ({
+// ✅ 2. Extra Images (if you want to add other images like lifestyle shots)
+const extraImageRows = images
+  .filter((img) => !colorImageMap.has(img.color)) // Normally this is empty in your logic
+  .map((img) => ({
     Handle: handle,
     Title: "",
     "Body (HTML)": "",
     Tags: "",
     "Option1 Name": "",
     "Option1 Value": "",
-    "Option2 Name": " ",
-    "Option2 Value": " ",
-    //"Variant SKU": "",
+    "Option2 Name": "",
+    "Option2 Value": "",
     "Variant Price": "",
-    //"Compare At Price": "",
+    "Compare At Price": "",
     "Cost per item": "",
     "Image Src": img.image,
     "product.metafields.custom.original_prodect_url": "",
@@ -237,7 +246,8 @@ export async function extractProductData(page, urlObj) {
     "Variant Inventory Tracker": "",
     Type: "",
     Vendor: "",
+    Published: "",
   }));
 
-  return [mainRow, ...extraImageRows];
+return [mainRow, ...colorRows, ...extraImageRows];
 }
