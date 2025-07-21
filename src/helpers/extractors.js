@@ -40,14 +40,14 @@ export async function extractProductData(page, urlObj) {
 
   // Handle color variants
   const colorFieldset = await page.$('fieldset[name="Color"]');
-  let option2Name = "";
-  let option2Value = "";
+  let colorVariantName = "";
+  let colorVariantValue = "";
 
   if (colorFieldset) {
     const variantInputs = await colorFieldset.$$(".variant-input");
     if (variantInputs.length > 1) {
       // Multiple variants - extract main image for each
-      option2Name = "Color";
+      colorVariantName = "Color";
       
       for (const inputDiv of variantInputs) {
         const value = await inputDiv.getAttribute("data-value");
@@ -78,8 +78,8 @@ export async function extractProductData(page, urlObj) {
     } else if (variantInputs.length === 1) {
       // Single variant - extract all images but only set Option2 in first row
       const value = await variantInputs[0].getAttribute("data-value");
-      option2Name = "Color";
-      option2Value = value;
+      colorVariantName = "Color";
+      colorVariantValue = value;
       
       const srcs = await page.$$eval(".pdp-main-img", (imgs) => 
         imgs.map((img) => img.getAttribute("data-photoswipe-src"))
@@ -114,8 +114,8 @@ export async function extractProductData(page, urlObj) {
     Tags: tags,
     "Option1 Name": option1Name,
     "Option1 Value": option1Value,
-    "Option2 Name": option2Name, // Will be empty if no variants
-    "Option2 Value": option2Value, // Will be empty if no variants
+    "Option2 Name": colorVariantName, // Will be empty if no variants
+    "Option2 Value": colorVariantValue, // Will be empty if no variants
     "Variant SKU": "",
     "Variant Price": variantPrice.toFixed(2),
     "Compare At Price": price.toFixed(2),
