@@ -1,6 +1,6 @@
 import { launchBrowser } from "./helpers/browser.js";
 import { extractProductData } from "./helpers/extractors.js";
-import { saveToExcel } from "./helpers/excelWriter.js";
+import { saveToCSV } from "./helpers/excelWriter.js";
 
 const urls = [
   {
@@ -57,7 +57,7 @@ for (const [index, urlObj] of urls.entries()) {
 await browser.close();
 
 if (allData.length > 0) {
-  saveToExcel(allData);
+  saveToCSV(allData);
 } else {
   console.warn("⚠️ No data extracted. Excel file was not created.");
 }
