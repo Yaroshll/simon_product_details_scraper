@@ -32,7 +32,7 @@ const urls = [
     tags: "",
   },
   {
-    url: "https://shop.simon.com/products/coach-outlet-sprint-backpack?crpid=8439523803196",
+    url: "https://shop.simon.com/products/coach-outlet-6",
     tags: "",
   },
 ];
