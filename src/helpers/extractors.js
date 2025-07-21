@@ -203,12 +203,17 @@ export async function extractProductData(page, urlObj) {
     "Option1 Value": option1Value,
     "Option2 Name": images.length > 1 ? "Color" : "",
     "Option2 Value": images.length > 1 ? images[0]?.color || "" : "",
-    "Variant SKU": "",
+    //"Variant SKU": "",
     "Variant Price": variantPrice.toFixed(2),
     "Compare At Price": price.toFixed(2),
     "Cost per item": cost.toFixed(2),
     "Image Src": images[0]?.image || "",
-    "Product URL": url,
+    "product.metafields.custom.original_prodect_url":  url,
+    "Variant Fulfillment Service": "manual",
+    "Variant Inventory Policy": "deny",
+    "Variant Inventory Tracker": "shopify",
+    "Type": "USA Products",
+    "Vendor": "simon",
   };
 
   // ✅ 2. Extra Images Rows with Option2 Value filled for each image
@@ -221,12 +226,18 @@ export async function extractProductData(page, urlObj) {
     "Option1 Value": "",
     "Option2 Name": " ",
     "Option2 Value": " ",
-    "Variant SKU": "",
+    //"Variant SKU": "",
     "Variant Price": "",
-    "Compare At Price": "",
+    //"Compare At Price": "",
     "Cost per item": "",
     "Image Src": img.image,
-    "Product URL": "",
+    "product.metafields.custom.original_prodect_url": "",
+    "Variant Fulfillment Service": "",
+    "Variant Inventory Policy": "",
+    "Variant Inventory Tracker": "",
+    "Type": "",
+    "Vendor": "",
+
   }));
 
   return [mainRow, ...extraImageRows];
