@@ -32,12 +32,12 @@ const urls = [
     tags: "",
   },
   {
-    url: "https://shop.simon.com/products/coach-outlet-6",
+    url: "https://shop.simon.com/",
     tags: "",
   },
 ];
-
 const allData = [];
+const failedUrls = [];
 
 const browser = await launchBrowser();
 const context = await browser.newContext();
@@ -50,14 +50,15 @@ for (const [index, urlObj] of urls.entries()) {
     allData.push(...productRows);
     console.log(`✅ Finished: ${urlObj.url} — Extracted ${productRows.length} rows.`);
   } catch (err) {
-    console.error(`❌ Error extracting ${urlObj.url}`, err);
+    console.error(`❌ Error extracting ${urlObj.url}`, err.message);
+    failedUrls.push(urlObj);  // ✅ Save the failed URL with its tag
   }
 }
 
 await browser.close();
 
 if (allData.length > 0) {
-  saveToCSV(allData);
+  saveToCSV(allData, failedUrls);
 } else {
-  console.warn("⚠️ No data extracted. Excel file was not created.");
+  console.warn("⚠️ No data extracted. CSV file was not created.");
 }
