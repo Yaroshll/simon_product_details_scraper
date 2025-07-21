@@ -27,21 +27,21 @@ export async function extractProductData(page, urlObj) {
   const savedImages = new Set();
 
   // Function to extract image src from srcset
-  async function extractMainImageSrc(page) {
+ async function extractMainImageSrc(page) {
   try {
-    await page.waitForSelector(".pdp-main-img", {
-      state: "visible",
-      timeout: 5000,
-    });
-    const src = await page.$eval(".pdp-main-img", (img) =>
-      img.getAttribute("data-photoswipe-src")
+    await page.waitForSelector('.pdp-main-img', { state: 'visible', timeout: 5000 });
+
+    const src = await page.$eval('.pdp-main-img', img =>
+      img.getAttribute('data-photoswipe-src')
     );
+
     return src;
   } catch (e) {
-    console.warn("⚠️ Could not extract main image:", e.message);
+    console.warn("⚠️ Could not extract main image source after variant change:", e.message);
     return null;
   }
 }
+
 
 
   // 1. Get all color variant containers
