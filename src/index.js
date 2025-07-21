@@ -15,6 +15,10 @@ const urls = [
     url: "https://shop.simon.com/products/coach-outlet-mini-rowan-crossbody-bag-with-charms?crpid=8585358704700",
     tags: "",
   },
+  {
+    url: "https://shop.simon.com/products/coach-outlet-warner-crossbody-bag-1?crpid=8585878011964",
+    tags: "",
+  },
 ];
 
 const allData = [];
