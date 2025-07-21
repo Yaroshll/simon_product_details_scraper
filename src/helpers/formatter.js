@@ -13,8 +13,12 @@ export function extractPrice(text) {
 
 export function calculatePrices(basePrice) {
   const EXCHANGE_RATE = 3.675;
-  const VARAINT_PRICE_RATE = 1.3;
+  const VARIANT_PRICE_RATE = 1.3;
   const cost = basePrice * EXCHANGE_RATE;
-  const variantPrice = cost * VARAINT_PRICE_RATE;
+  const rawVariantPrice = cost * VARIANT_PRICE_RATE;
+
+  // Round down to nearest integer and add 0.99
+  const variantPrice = Math.floor(rawVariantPrice) + 0.99;
+
   return { cost, variantPrice };
 }
