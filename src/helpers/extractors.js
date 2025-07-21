@@ -92,17 +92,17 @@ export async function extractProductData(page, urlObj) {
         `Only one color variant found: ${color}. Extracting all images.`
       );
 
-      const srcsets = await page.$$eval(".slick-track img", (imgs) =>
-        imgs.map((img) => img.getAttribute("srcset"))
-      );
+      const mainImages = await page.$$eval('.pdp-main-img', imgs =>
+  imgs.map(img => img.getAttribute('data-photoswipe-src'))
+);
 
-      srcsets.forEach((srcset) => {
-        const src = srcset?.split(",")[0]?.trim().split(" ")[0];
-        if (src && !savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-          savedImages.add(src);
-        }
-      });
+mainImages.forEach(src => {
+  if (src && !savedImages.has(src)) {
+    images.push({ handle, image: src, color });
+    savedImages.add(src);
+  }
+});
+
     } else {
       // variantDetails.length > 1
       console.log(
