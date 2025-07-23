@@ -16,10 +16,25 @@ const urls = [
     tags: "",
   },
   {
-    url: "https://shop.simon.com/products/coach-outlet-warner-crossbody-bag-1?crpid=8585878011964",
+    url: "https://shop.simon.com/products/coach-outlet-graham-crossbody-bag-in-signature-canvas?crpid=7795878985788&cid=adClick:collection",
     tags: "",
   },
-
+  {
+    url: "https://shop.simon.com/products/coach-outlet-mini-klare-crossbody-bag-3?crpid=7925661499452&cid=adClick:collection",
+    tags: "",
+  },
+  {
+    url: "https://shop.simon.com/products/coach-outlet-mini-jamie-camera-bag-in-signature-canvas-1?crpid=7868850634812&cid=adClick:collection",
+    tags: "",
+  },
+  {
+    url: "https://shop.simon.com/products/coach-outlet-sullivan-crossbody-bag-in-signature-canvas?crpid=7921906647100&cid=adClick:collection",
+    tags: "",
+  },
+  {
+    url: "https://shop.simon.com/products/coach-outlet-sullivan-pack-in-signature-canvas-2?crpid=7923621593148&cid=adClick:collection",
+    tags: "",
+  },
 ];
 const allData = [];
 const failedUrls = [];

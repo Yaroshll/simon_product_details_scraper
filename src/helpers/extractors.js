@@ -6,10 +6,9 @@ import {
 
 export async function extractProductData(page, urlObj) {
   const { url, tags } = urlObj;
-  await page.goto(url, { waitUntil: "load", timeout:70000 });
+  await page.goto(url, { waitUntil: "load", timeout: 70000 });
 
   const handle = formatHandleFromUrl(url);
-
   const title = await page.textContent("h1.product-single__title");
   const priceText = await page.textContent("span.product__price--compare");
   const price = extractPrice(priceText);
@@ -30,9 +29,20 @@ export async function extractProductData(page, urlObj) {
         state: "visible",
         timeout: 10000,
       });
-      return await page.$eval(".pdp-main-img", (img) =>
-        img.getAttribute("data-photoswipe-src")
-      );
+
+      return await page.$eval(".pdp-main-img", (img) => {
+        const srcset = img.getAttribute("srcset");
+        if (srcset) {
+          const parts = srcset.split(",");
+          const lastEntry = parts[parts.length - 1].trim().split(" ")[0];
+          return lastEntry.startsWith("//") ? `https:${lastEntry}` : lastEntry;
+        }
+        return (
+          img.getAttribute("data-photoswipe-src") ||
+          img.getAttribute("src") ||
+          ""
+        );
+      });
     } catch (e) {
       console.warn("⚠️ Could not extract main image source:", e.message);
       return null;
@@ -52,13 +62,12 @@ export async function extractProductData(page, urlObj) {
       const labelElement = await inputDiv.$("label.variant__button-label");
 
       if (value && labelElement) {
+        const labelFor = await labelElement.getAttribute("for");
         variantDetails.push({
           value,
           isChecked,
           labelLocator: page.locator(
-            `label.variant__button-label[for="${await labelElement.getAttribute(
-              "for"
-            )}"]`
+            `label.variant__button-label[for="${labelFor}"]`
           ),
         });
       }
@@ -72,7 +81,10 @@ export async function extractProductData(page, urlObj) {
     console.log(`✅ Single color variant: ${color}`);
 
     const mainImages = await page.$$eval(".pdp-main-img", (imgs) =>
-      imgs.map((img) => img.getAttribute("data-photoswipe-src"))
+      imgs.map(
+        (img) =>
+          img.getAttribute("data-photoswipe-src") || img.getAttribute("src")
+      )
     );
 
     mainImages.forEach((src) => {
@@ -103,33 +115,23 @@ export async function extractProductData(page, urlObj) {
         }
       } else {
         try {
-          await labelLocator.click({ timeout: 5000 });
+          console.log(`🎨 Selecting color: ${color}`);
+          await labelLocator.click({ timeout: 50000 });
 
-          const previousSrc = await extractMainImageSrc();
-
-          await page.waitForTimeout(2000); // allow image to update
-
-          await page
-            .waitForFunction(
-              (prev) => {
-                const img = document.querySelector(".pdp-main-img");
-                return (
-                  img &&
-                  img.getAttribute("data-photoswipe-src") &&
-                  !img.getAttribute("data-photoswipe-src").includes(prev)
-                );
-              },
-              previousSrc,
-              { timeout: 15000 }
-            )
-            .catch(() =>
-              console.log(`⚠️ Image did not change after selecting "${color}".`)
-            );
+          await page.waitForTimeout(35000); // Wait for the image to visually update
 
           const src = await extractMainImageSrc();
           if (src && !savedImages.has(src)) {
+            // Found a new image
             images.push({ handle, image: src, color });
             savedImages.add(src);
+          } else {
+            // Reuse previous image or empty if unavailable
+            const fallbackImage = [...savedImages][0] || ""; // first saved image
+            images.push({ handle, image: fallbackImage, color }); // blank row with reused image
+            console.log(
+              `⚠️ No new image found for "${color}", saving fallback image.`
+            );
           }
         } catch (err) {
           console.warn(`⚠️ Could not select color "${color}":`, err.message);
@@ -179,7 +181,7 @@ export async function extractProductData(page, urlObj) {
       Tags: "",
       "Option1 Name": "",
       "Option1 Value": "",
-      "Option2 Name": "Color",
+      "Option2 Name": " ",
       "Option2 Value": color,
       "Variant Price": "",
       "Cost per item": "",
