@@ -6,7 +6,7 @@ import {
 
 export async function extractProductData(page, urlObj) {
   const { url, tags } = urlObj;
-  await page.goto(url, { waitUntil: "load", timeout: 60000 });
+  await page.goto(url, { waitUntil: "load", timeout:70000 });
 
   const handle = formatHandleFromUrl(url);
 
@@ -28,7 +28,7 @@ export async function extractProductData(page, urlObj) {
     try {
       await page.waitForSelector(".pdp-main-img", {
         state: "visible",
-        timeout: 5000,
+        timeout: 10000,
       });
       return await page.$eval(".pdp-main-img", (img) =>
         img.getAttribute("data-photoswipe-src")
@@ -107,22 +107,23 @@ export async function extractProductData(page, urlObj) {
 
           const previousSrc = await extractMainImageSrc();
 
+          await page.waitForTimeout(2000); // allow image to update
+
           await page
             .waitForFunction(
               (prev) => {
                 const img = document.querySelector(".pdp-main-img");
                 return (
                   img &&
-                  !img.getAttribute("data-photoswipe-src")?.includes(prev)
+                  img.getAttribute("data-photoswipe-src") &&
+                  !img.getAttribute("data-photoswipe-src").includes(prev)
                 );
               },
               previousSrc,
-              { timeout: 7000 }
+              { timeout: 15000 }
             )
             .catch(() =>
-              console.log(
-                `⚠️ Image did not change after selecting "${color}".`
-              )
+              console.log(`⚠️ Image did not change after selecting "${color}".`)
             );
 
           const src = await extractMainImageSrc();

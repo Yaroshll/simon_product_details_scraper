@@ -19,22 +19,7 @@ const urls = [
     url: "https://shop.simon.com/products/coach-outlet-warner-crossbody-bag-1?crpid=8585878011964",
     tags: "",
   },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-owen-backpack-in-signature-canvas-1?crpid=8585320693820",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-jude-bag-in-signature-canvas?crpid=8278100148284",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-smith-tote-bag-27?crpid=8278028550204",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/",
-    tags: "",
-  },
+
 ];
 const allData = [];
 const failedUrls = [];
