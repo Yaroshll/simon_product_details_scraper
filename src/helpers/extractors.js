@@ -5,7 +5,7 @@ import {
 } from "./formatter.js";
 
 export async function extractProductData(page, urlObj) {
-  const { url, tags,brand , typeitem } = urlObj;
+  const { url, tags, brand, typeitem } = urlObj;
   await page.goto(url, { waitUntil: "load", timeout: 70000 });
 
   const handle = formatHandleFromUrl(url);
@@ -25,12 +25,14 @@ export async function extractProductData(page, urlObj) {
 
   async function extractMainImageSrc() {
     try {
-      await page.waitForSelector(".pdp-main-img", {
-        state: "visible",
-        timeout: 10000,
+      // Wait for image elements to be present
+      await page.waitForSelector(".pdp-main-img, .pswp__img", {
+        state: "attached",
+        timeout: 15000
       });
 
-      return await page.$eval(".pdp-main-img", (img) => {
+      // Try to get the main product image first
+      const mainImageSrc = await page.$eval(".pdp-main-img", (img) => {
         const srcset = img.getAttribute("srcset");
         if (srcset) {
           const parts = srcset.split(",");
@@ -42,7 +44,15 @@ export async function extractProductData(page, urlObj) {
           img.getAttribute("src") ||
           ""
         );
-      });
+      }).catch(() => null);
+
+      if (mainImageSrc) return mainImageSrc;
+
+      // If main image not found, try photoswipe images
+      return await page.$eval(".pswp__img", (img) => {
+        const src = img.getAttribute("src");
+        return src && src.startsWith("//") ? `https:${src}` : src;
+      }).catch(() => null);
     } catch (e) {
       console.warn("⚠️ Could not extract main image source:", e.message);
       return null;
@@ -76,29 +86,105 @@ export async function extractProductData(page, urlObj) {
 
   if (variantDetails.length === 0) {
     console.log("⚠️ No color variants found. Skipping color logic.");
+    
+    // Extract images for products without color variants
+    const imageElements = await page.$$(".pdp-main-img, .pswp__img");
+    for (const imgElement of imageElements) {
+      const src = await imgElement.evaluate((img) => {
+        const srcset = img.getAttribute("srcset");
+        if (srcset) {
+          const parts = srcset.split(",");
+          const lastEntry = parts[parts.length - 1].trim().split(" ")[0];
+          return lastEntry.startsWith("//") ? `https:${lastEntry}` : lastEntry;
+        }
+        return (
+          img.getAttribute("data-photoswipe-src") ||
+          img.getAttribute("src") ||
+          ""
+        );
+      });
+      
+      if (src && !savedImages.has(src)) {
+        images.push({ handle, image: src, color: "" });
+        savedImages.add(src);
+      }
+    }
   } else if (variantDetails.length === 1) {
     const color = variantDetails[0].value;
     console.log(`✅ Single color variant: ${color}`);
 
-    const mainImages = await page.$$eval(".pdp-main-img", (imgs) =>
-      imgs.map(
-        (img) =>
-          img.getAttribute("data-photoswipe-src") || img.getAttribute("src")
-      )
-    );
-
-    mainImages.forEach((src) => {
+    const imageElements = await page.$$(".pdp-main-img, .pswp__img");
+    for (const imgElement of imageElements) {
+      const src = await imgElement.evaluate((img) => {
+        const srcset = img.getAttribute("srcset");
+        if (srcset) {
+          const parts = srcset.split(",");
+          const lastEntry = parts[parts.length - 1].trim().split(" ")[0];
+          return lastEntry.startsWith("//") ? `https:${lastEntry}` : lastEntry;
+        }
+        return (
+          img.getAttribute("data-photoswipe-src") ||
+          img.getAttribute("src") ||
+          ""
+        );
+      });
+      
       if (src && !savedImages.has(src)) {
         images.push({ handle, image: src, color });
         savedImages.add(src);
       }
-    });
+    }
   } else {
     console.log(`✅ Multiple color variants: ${variantDetails.length}`);
     const sortedVariants = variantDetails.sort(
       (a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0)
     );
 
+    // First, capture the initial/default color images
+    for (const variant of sortedVariants) {
+      const color = variant.value;
+      const inputHandle = await page
+        .locator(`input[name="Color"][value="${color}"]`)
+        .elementHandle();
+      const currentlyChecked = await inputHandle?.evaluate((el) => el.checked);
+
+      if (currentlyChecked) {
+        console.log(`📸 Capturing initial images for color: ${color}`);
+        
+        // Wait for images to load for the initial color
+        await page.waitForSelector(".pdp-main-img, .pswp__img", {
+          state: "visible",
+          timeout: 10000
+        });
+        
+        // Get all images for this color
+        const imageElements = await page.$$(".pdp-main-img, .pswp__img");
+        for (const imgElement of imageElements) {
+          const src = await imgElement.evaluate((img) => {
+            const srcset = img.getAttribute("srcset");
+            if (srcset) {
+              const parts = srcset.split(",");
+              const lastEntry = parts[parts.length - 1].trim().split(" ")[0];
+              return lastEntry.startsWith("//") ? `https:${lastEntry}` : lastEntry;
+            }
+            return (
+              img.getAttribute("data-photoswipe-src") ||
+              img.getAttribute("src") ||
+              ""
+            );
+          });
+          
+          if (src && !savedImages.has(src)) {
+            images.push({ handle, image: src, color });
+            savedImages.add(src);
+            console.log(`✅ Saved image for ${color}: ${src.substring(0, 50)}...`);
+          }
+        }
+        break;
+      }
+    }
+
+    // Then iterate through other colors
     for (const variant of sortedVariants) {
       const color = variant.value;
       const labelLocator = variant.labelLocator;
@@ -107,32 +193,58 @@ export async function extractProductData(page, urlObj) {
         .elementHandle();
       const currentlyChecked = await inputHandle?.evaluate((el) => el.checked);
 
-      if (currentlyChecked) {
-        const src = await extractMainImageSrc();
-        if (src && !savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-          savedImages.add(src);
-        }
-      } else {
+      if (!currentlyChecked) {
         try {
           console.log(`🎨 Selecting color: ${color}`);
-          await labelLocator.click({ timeout: 50000 });
+          
+          // Click the color option
+          await labelLocator.click({ timeout: 30000 });
+          
+          // Wait for the page to update - wait for network idle or specific element changes
+          await page.waitForTimeout(2000); // Short wait for UI update
+          
+          // Wait for images to load specifically for this color variant
+          await page.waitForFunction(() => {
+            const imgs = document.querySelectorAll('.pdp-main-img, .pswp__img');
+            return imgs.length > 0 && Array.from(imgs).some(img => {
+              const src = img.src || img.getAttribute('data-photoswipe-src');
+              return src && src.includes('//');
+            });
+          }, { timeout: 15000 });
+          
+          await page.waitForTimeout(1000); // Additional stabilization time
 
-          await page.waitForTimeout(35000); // Wait for the image to visually update
-
-          const src = await extractMainImageSrc();
-          if (src && !savedImages.has(src)) {
-            // Found a new image
-            images.push({ handle, image: src, color });
-            savedImages.add(src);
-          } else {
-            // Reuse previous image or empty if unavailable
-            const fallbackImage = [...savedImages][0] || ""; // first saved image
-            images.push({ handle, image: fallbackImage, color }); // blank row with reused image
-            console.log(
-              `⚠️ No new image found for "${color}", saving fallback image.`
-            );
+          // Extract all images for this color
+          const imageElements = await page.$$(".pdp-main-img, .pswp__img");
+          let foundNewImage = false;
+          
+          for (const imgElement of imageElements) {
+            const src = await imgElement.evaluate((img) => {
+              const srcset = img.getAttribute("srcset");
+              if (srcset) {
+                const parts = srcset.split(",");
+                const lastEntry = parts[parts.length - 1].trim().split(" ")[0];
+                return lastEntry.startsWith("//") ? `https:${lastEntry}` : lastEntry;
+              }
+              return (
+                img.getAttribute("data-photoswipe-src") ||
+                img.getAttribute("src") ||
+                ""
+              );
+            });
+            
+            if (src && !savedImages.has(src)) {
+              images.push({ handle, image: src, color });
+              savedImages.add(src);
+              foundNewImage = true;
+              console.log(`✅ Saved image for ${color}: ${src.substring(0, 50)}...`);
+            }
           }
+          
+          if (!foundNewImage) {
+            console.log(`⚠️ No new images found for "${color}"`);
+          }
+          
         } catch (err) {
           console.warn(`⚠️ Could not select color "${color}":`, err.message);
         }
@@ -159,7 +271,6 @@ export async function extractProductData(page, urlObj) {
     "Option2 Name": "Color",
     "Option2 Value": uniqueColors[0] || "",
     "Variant Price": variantPrice.toFixed(2),
-    //"Compare At Price": price.toFixed(2),
     "Cost per item": cost.toFixed(2),
     "Image Src": colorImageMap.get(uniqueColors[0]) || "",
     "product.metafields.custom.original_prodect_url": url,
@@ -167,7 +278,7 @@ export async function extractProductData(page, urlObj) {
     "Variant Inventory Policy": "deny",
     "Variant Inventory Tracker": "shopify",
     "product.metafields.custom.brand": brand || "",
-  "product.metafields.custom.typeitem": typeitem || "",
+    "product.metafields.custom.typeitem": typeitem || "",
     Type: "USA Products",
     Vendor: "simon",
     Published: "TRUE",
@@ -183,20 +294,20 @@ export async function extractProductData(page, urlObj) {
       Tags: "",
       "Option1 Name": "",
       "Option1 Value": "",
-      "Option2 Name": " ",
+      "Option2 Name": "Color",
       "Option2 Value": color,
-      "Variant Price": "",
-      "Cost per item": "",
+      "Variant Price": variantPrice.toFixed(2),
+      "Cost per item": cost.toFixed(2),
       "Image Src": colorImageMap.get(color) || "",
       "product.metafields.custom.original_prodect_url": "",
-      "Variant Fulfillment Service": "",
-      "Variant Inventory Policy": "",
-      "Variant Inventory Tracker": "",
+      "Variant Fulfillment Service": "manual",
+      "Variant Inventory Policy": "deny",
+      "Variant Inventory Tracker": "shopify",
       "product.metafields.custom.brand": brand || "",
-  "product.metafields.custom.typeitem": typeitem || "",
-      Type: "",
-      Vendor: "",
-      Published: "",
+      "product.metafields.custom.typeitem": typeitem || "",
+      Type: "USA Products",
+      Vendor: "simon",
+      Published: "TRUE",
     }));
 
     rows.push(...colorRows);
@@ -217,8 +328,8 @@ export async function extractProductData(page, urlObj) {
       "Variant Fulfillment Service": "",
       "Variant Inventory Policy": "",
       "Variant Inventory Tracker": "",
-      "product.metafields.custom.brand":"",
-  "product.metafields.custom.typeitem":  "",
+      "product.metafields.custom.brand": "",
+      "product.metafields.custom.typeitem": "",
       Type: "",
       Vendor: "",
       Published: "",

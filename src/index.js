@@ -4,23 +4,11 @@ import { saveToCSV } from "./helpers/excelWriter.js";
 
 const urls = [
   {
-    url: "https://shop.simon.com/products/coach-outlet-carmen-mini-crossbody-bag-1",
+    url: "https://shop.simon.com/products/coach-outlet-city-tote-bag-in-signature-canvas?crpid=7913406267452&cid=adClick%3Acollection&variant=42616607637564",
     tags: "",
     brand: "Coach Outlet", 
     typeitem: "Handbag"  
-  },
-  {
-    url: "https://shop.simon.com/products/puma-x-harry-potter-big-kids-baby-tee?crpid=8598490742844",
-    tags: "m color m size",
-    brand: "Coach Outlet", 
-    typeitem: "Handbag"  
-  },
-  {
-    url: "https://shop.simon.com/products/puma-x-harry-potter-womens-polo-shirt?crpid=8598900539452",
-    tags: "s color m size",
-    brand: "Coach Outlet", 
-    typeitem: "Handbag"  
-  },
+  }
   
 ];
 const allData = [];
