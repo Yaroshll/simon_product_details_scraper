@@ -4,252 +4,226 @@ import {
   calculatePrices,
 } from "./formatter.js";
 
-/**
- * Helper: normalize protocol-relative URLs
- */
+/* -------------------- helpers -------------------- */
+
 function toAbsoluteUrl(src) {
   if (!src) return "";
-  if (src.startsWith("//")) return `https:${src}`;
-  return src;
+  return src.startsWith("//") ? `https:${src}` : src;
+}
+
+async function readInlineHeroSrc(page) {
+  // Try multiple hero selectors; return the best URL we can get
+  const sel = [".pdp-main-img", ".product-main-image img", ".product__main-photos img"];
+  for (const s of sel) {
+    const exists = await page.$(s);
+    if (!exists) continue;
+    try {
+      const src = await page.$eval(s, (img) => {
+        const srcset = img.getAttribute("srcset");
+        if (srcset) {
+          const parts = srcset.split(",").map(p => p.trim().split(" ")[0]).filter(Boolean);
+          if (parts.length) return parts[parts.length - 1];
+        }
+        return img.currentSrc || img.getAttribute("data-photoswipe-src") || img.getAttribute("src") || "";
+      });
+      if (src) return toAbsoluteUrl(src);
+    } catch {}
+  }
+  return "";
+}
+
+async function openZoomAndGetHiResSrc(page, prevSrc = "") {
+  // Click zoom button → wait PhotoSwipe → choose visible non-placeholder → ensure high-res
+  const zoomBtn = page.locator('button.js-photoswipe__zoom');
+  await zoomBtn.waitFor({ state: "visible", timeout: 10000 });
+  await zoomBtn.click();
+
+  // Wait a visible image exists
+  await page.waitForSelector(".pswp__img", { state: "visible", timeout: 10000 });
+
+  // Wait until we have a "new" (not placeholder) src that differs from prevSrc and is reasonably large
+  const newSrc = await page.waitForFunction(() => {
+    const imgs = Array.from(document.querySelectorAll(".pswp__img"));
+    const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
+    if (!visible) return null;
+    const isPlaceholder = visible.classList.contains("pswp__img--placeholder");
+    const src = visible.getAttribute("src") || "";
+    if (!src) return null;
+
+    // Surface values to outer scope
+    return { src, naturalWidth: visible.naturalWidth, isPlaceholder };
+  }, {}, { polling: 100, timeout: 15000 }).then(async (val) => {
+    // poll until it’s not placeholder, different from prev, and big enough
+    for (let i = 0; i < 50; i++) {
+      const v = await page.evaluate(() => {
+        const imgs = Array.from(document.querySelectorAll(".pswp__img"));
+        const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
+        if (!visible) return { src: "", naturalWidth: 0, isPlaceholder: true };
+        return {
+          src: visible.getAttribute("src") || "",
+          naturalWidth: visible.naturalWidth || 0,
+          isPlaceholder: visible.classList.contains("pswp__img--placeholder"),
+        };
+      });
+      const srcAbs = toAbsoluteUrl(v.src);
+      const changed = prevSrc ? srcAbs !== toAbsoluteUrl(prevSrc) : true;
+      if (v.src && !v.isPlaceholder && v.naturalWidth >= 1000 && changed) return srcAbs;
+      await page.waitForTimeout(120);
+    }
+    // Fallback: first non-empty visible src
+    const fallback = await page.$$eval(".pswp__img", (imgs) => {
+      const v = imgs.find((img) => getComputedStyle(img).display !== "none" && img.getAttribute("src"));
+      return v ? v.getAttribute("src") : "";
+    });
+    return toAbsoluteUrl(fallback || "");
+  });
+
+  // Close modal
+  try { await page.keyboard.press("Escape"); } catch {}
+
+  return newSrc || "";
 }
 
 /**
- * Open PhotoSwipe zoom modal and return the best (non-placeholder) image src.
- * - Clicks the zoom button
- * - Waits for .pswp__img to render
- * - Prefers the visible image without the placeholder class
- * - Closes the modal (ESC)
+ * After clicking a color, wait for the "hero" image URL to actually change
+ * Some sites keep the same node and swap only the src/srcset/currentSrc.
  */
-async function openZoomAndGetHiResSrc(page) {
-  try {
-    // Ensure zoom button exists & is interactable
-    const zoomBtn = page.locator('button.js-photoswipe__zoom');
-    await zoomBtn.waitFor({ state: "visible", timeout: 10000 });
-    await zoomBtn.click();
+async function waitForHeroSrcChange(page, prevSrc) {
+  const normalize = (s) => toAbsoluteUrl(s || "");
+  const prev = normalize(prevSrc);
 
-    // Wait for the PhotoSwipe modal image(s)
-    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 10000 });
-
-    // Collect candidate images from the modal
-    const candidateSrcs = await page.$$eval(".pswp__img", (imgs) => {
-      // Prefer the one that is actually displayed and not a placeholder
-      const visible = imgs.find(
-        (img) =>
-          getComputedStyle(img).display !== "none" &&
-          !img.className.includes("pswp__img--placeholder") &&
-          img.getAttribute("src")
-      );
-      if (visible && visible.getAttribute("src")) return [visible.getAttribute("src")];
-
-      // Fallback: first non-placeholder with src
-      const nonPlaceholder = imgs.find(
-        (img) =>
-          !img.className.includes("pswp__img--placeholder") &&
-          img.getAttribute("src")
-      );
-      if (nonPlaceholder && nonPlaceholder.getAttribute("src")) return [nonPlaceholder.getAttribute("src")];
-
-      // Last fallback: any img with src
-      const any = imgs.find((img) => img.getAttribute("src"));
-      return any ? [any.getAttribute("src")] : [];
-    });
-
-    // Close the modal (ESC)
-    await page.keyboard.press("Escape");
-
-    return toAbsoluteUrl(candidateSrcs[0] || "");
-  } catch (err) {
-    // Try to close modal if it somehow stayed open
-    try { await page.keyboard.press("Escape"); } catch (_) {}
-    return "";
+  // Poll both inline hero and PhotoSwipe candidate (if open later)
+  for (let i = 0; i < 80; i++) {
+    const current = await readInlineHeroSrc(page);
+    if (current && normalize(current) !== prev) return current;
+    await page.waitForTimeout(120);
   }
+  // If hero never changes (rare), return prev; zoom stage will still enforce change
+  return prev;
 }
+
+/* -------------------- main -------------------- */
 
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
+
   await page.goto(url, { waitUntil: "load", timeout: 700000 });
+  await page.waitForLoadState("domcontentloaded");
 
   const handle = formatHandleFromUrl(url);
   const title = (await page.textContent("h1.product-single__title"))?.trim() || "";
   const priceText = await page.textContent("span.product__price--compare");
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
-
   const option1Label = await page.textContent("label.variant__label");
   const option1Name = option1Label?.match(/^\s*(\w+)/)?.[1]?.trim() || "";
   const option1Value = option1Label?.match(/\((.*?)\)/)?.[1]?.trim() || "";
-
   const description = (await page.textContent(".pdp-details-txt"))?.trim() || "";
 
   const images = [];
   const savedImages = new Set();
 
-  /**
-   * UPDATED: Extract main image via PhotoSwipe zoom first, fallback to .pdp-main-img
-   */
-  async function extractMainImageSrc() {
-    // 1) Preferred: open zoom and read hi-res src from .pswp__img
-    const zoomSrc = await openZoomAndGetHiResSrc(page);
-    if (zoomSrc) return zoomSrc;
-
-    // 2) Fallback: read from the inline main image if present
-    try {
-      await page.waitForSelector(".pdp-main-img", {
-        state: "visible",
-        timeout: 5000,
-      });
-
-      const inlineSrc = await page.$eval(".pdp-main-img", (img) => {
-        const srcset = img.getAttribute("srcset");
-        if (srcset) {
-          const parts = srcset.split(",");
-          const lastEntry = parts[parts.length - 1].trim().split(" ")[0];
-          return lastEntry || "";
-        }
-        return (
-          img.getAttribute("data-photoswipe-src") ||
-          img.getAttribute("src") ||
-          ""
-        );
-      });
-      return toAbsoluteUrl(inlineSrc);
-    } catch (e) {
-      console.warn("⚠️ Could not extract main image source:", e.message);
-      return "";
-    }
-  }
-
-  // Build list of color options
+  // Build color list
   const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
-
   if (colorFieldset) {
     const variantInputs = await colorFieldset.$$(".variant-input");
-
     for (const inputDiv of variantInputs) {
       const value = await inputDiv.getAttribute("data-value");
       const inputElement = await inputDiv.$('input[type="radio"]');
       const isChecked = await inputElement?.evaluate((el) => el.checked);
       const labelElement = await inputDiv.$("label.variant__button-label");
-
       if (value && labelElement) {
         const labelFor = await labelElement.getAttribute("for");
         variantDetails.push({
           value,
           isChecked,
-          labelLocator: page.locator(
-            `label.variant__button-label[for="${labelFor}"]`
-          ),
+          labelLocator: page.locator(`label.variant__button-label[for="${labelFor}"]`),
         });
       }
     }
   }
 
+  // Helper to capture high-res for whatever color is currently selected
+  async function captureHiResForCurrentColor(color, prevInlineSrc = "") {
+    // Ensure hero really swapped (prevents “first image for all colors”)
+    await waitForHeroSrcChange(page, prevInlineSrc);
+
+    // Open zoom and get hi-res different from previous src
+    const hiRes = await openZoomAndGetHiResSrc(page, prevInlineSrc);
+    const srcFinal = hiRes || (await readInlineHeroSrc(page)) || "";
+
+    if (srcFinal) {
+      images.push({ handle, image: srcFinal, color });
+      // We still remember it to help with fallbacks, but do NOT block same src for another color
+      savedImages.add(srcFinal);
+    } else {
+      // Last-ditch: reuse first saved (keeps CSV structure)
+      const fallback = [...savedImages][0] || "";
+      images.push({ handle, image: fallback, color });
+    }
+  }
+
+  // No colors
   if (variantDetails.length === 0) {
-    console.log("⚠️ No color variants found. Skipping color logic.");
-
-    // Still try to grab at least one image from zoom
-    const src = await extractMainImageSrc();
-    if (src) {
-      images.push({ handle, image: src, color: "" });
-      savedImages.add(src);
-    }
-  } else if (variantDetails.length === 1) {
+    const prev = await readInlineHeroSrc(page);
+    await captureHiResForCurrentColor("", prev);
+  }
+  // Single color
+  else if (variantDetails.length === 1) {
     const color = variantDetails[0].value;
-    console.log(`✅ Single color variant: ${color}`);
+    const prev = await readInlineHeroSrc(page);
+    await captureHiResForCurrentColor(color, prev);
+  }
+  // Multiple colors
+  else {
+    const sorted = variantDetails.sort((a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0));
 
-    // Use zoom to get the true hi-res
-    const src = await extractMainImageSrc();
-    if (src && !savedImages.has(src)) {
-      images.push({ handle, image: src, color });
-      savedImages.add(src);
-    }
-  } else {
-    console.log(`✅ Multiple color variants: ${variantDetails.length}`);
-    const sortedVariants = variantDetails.sort(
-      (a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0)
-    );
-
-    // Cache currently selected color's image first
-    for (const variant of sortedVariants) {
-      const color = variant.value;
-      const labelLocator = variant.labelLocator;
-      const inputHandle = await page
-        .locator(`input[name="Color"][value="${color}"]`)
-        .elementHandle();
-      const currentlyChecked = await inputHandle?.evaluate((el) => el.checked);
-
-      if (currentlyChecked) {
-        // Grab hi-res for already selected color
-        const src = await extractMainImageSrc();
-        if (src && !savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-          savedImages.add(src);
-        } else if (src && savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-        }
+    // First, grab the already-selected color
+    for (const v of sorted) {
+      const color = v.value;
+      const input = await page.locator(`input[name="Color"][value="${color}"]`).elementHandle();
+      const checked = await input?.evaluate((el) => el.checked);
+      if (checked) {
+        const prev = await readInlineHeroSrc(page);
+        await captureHiResForCurrentColor(color, prev);
       }
     }
 
-    // Now iterate the rest; click color, wait for UI, open zoom, read src
-    for (const variant of sortedVariants) {
-      const color = variant.value;
-      const labelLocator = variant.labelLocator;
+    // Then iterate others
+    for (const v of sorted) {
+      const color = v.value;
+      const input = await page.locator(`input[name="Color"][value="${color}"]`).elementHandle();
+      const isChecked = await input?.evaluate((el) => el.checked);
 
-      try {
-        // If not checked, click to switch
-        const inputHandle = await page
-          .locator(`input[name="Color"][value="${color}"]`)
-          .elementHandle();
-        const isChecked = await inputHandle?.evaluate((el) => el.checked);
+      if (!isChecked) {
+        const prevInline = await readInlineHeroSrc(page);
+        await v.labelLocator.click({ timeout: 20000 });
 
-        if (!isChecked) {
-          console.log(`🎨 Selecting color: ${color}`);
-          await labelLocator.click({ timeout: 20000 });
-          // Wait for the radio to actually be checked
-          await page.waitForFunction(
-            (c) => {
-              const el = document.querySelector(`input[name="Color"][value="${c}"]`);
-              return !!el && el.checked === true;
-            },
-            color,
-            { timeout: 10000 }
-          );
-          // Give a short time for the gallery to update
-          await page.waitForTimeout(600);
-        }
+        // Wait radio becomes checked
+        await page.waitForFunction(
+          (c) => {
+            const el = document.querySelector(`input[name="Color"][value="${c}"]`);
+            return !!el && el.checked === true;
+          },
+          color,
+          { timeout: 10000 }
+        );
 
-        // Read hi-res from PhotoSwipe
-        const src = await extractMainImageSrc();
+        // Let the gallery do its thing
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(200);
 
-        if (src && !savedImages.has(src)) {
-          images.push({ handle, image: src, color });
-          savedImages.add(src);
-        } else if (src && savedImages.has(src)) {
-          // It might be the same image but still associate to color
-          images.push({ handle, image: src, color });
-        } else {
-          // Fallback to first saved image if nothing new
-          const fallbackImage = [...savedImages][0] || "";
-          images.push({ handle, image: fallbackImage, color });
-          console.log(
-            `⚠️ No new image found for "${color}", saving fallback image.`
-          );
-        }
-      } catch (err) {
-        console.warn(`⚠️ Could not select color "${color}":`, err.message);
+        await captureHiResForCurrentColor(color, prevInline);
       }
     }
   }
 
-  // Deduplicate by first occurrence per color
+  // Map first image per color
   const colorImageMap = new Map();
-  images.forEach((img) => {
-    if (!colorImageMap.has(img.color)) {
-      colorImageMap.set(img.color, img.image);
-    }
-  });
-
+  for (const img of images) {
+    if (!colorImageMap.has(img.color)) colorImageMap.set(img.color, img.image);
+  }
   const uniqueColors = [...colorImageMap.keys()];
 
   const mainRow = {
@@ -301,7 +275,6 @@ export async function extractProductData(page, urlObj) {
       Vendor: "",
       Published: "",
     }));
-
     rows.push(...colorRows);
   } else {
     const extraImages = images.slice(1).map((img) => ({
@@ -326,7 +299,6 @@ export async function extractProductData(page, urlObj) {
       Vendor: "",
       Published: "",
     }));
-
     rows.push(...extraImages);
   }
 
