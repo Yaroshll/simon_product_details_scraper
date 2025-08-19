@@ -6,35 +6,22 @@ const urls = [
   {
     url: "https://shop.simon.com/products/coach-outlet-carmen-mini-crossbody-bag-1",
     tags: "",
+    brand: "Coach Outlet", 
+    typeitem: "Handbag"  
   },
   {
-    url: "https://shop.simon.com/products/coach-outlet-hailey-flap-bag-in-sketch-signature-canvas",
-    tags: "",
+    url: "https://shop.simon.com/products/puma-x-harry-potter-big-kids-baby-tee?crpid=8598490742844",
+    tags: "m color m size",
+    brand: "Coach Outlet", 
+    typeitem: "Handbag"  
   },
   {
-    url: "https://shop.simon.com/products/coach-outlet-mini-rowan-crossbody-bag-with-charms?crpid=8585358704700",
-    tags: "",
+    url: "https://shop.simon.com/products/puma-x-harry-potter-womens-polo-shirt?crpid=8598900539452",
+    tags: "s color m size",
+    brand: "Coach Outlet", 
+    typeitem: "Handbag"  
   },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-graham-crossbody-bag-in-signature-canvas?crpid=7795878985788&cid=adClick:collection",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-mini-klare-crossbody-bag-3?crpid=7925661499452&cid=adClick:collection",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-mini-jamie-camera-bag-in-signature-canvas-1?crpid=7868850634812&cid=adClick:collection",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-sullivan-crossbody-bag-in-signature-canvas?crpid=7921906647100&cid=adClick:collection",
-    tags: "",
-  },
-  {
-    url: "https://shop.simon.com/products/coach-outlet-sullivan-pack-in-signature-canvas-2?crpid=7923621593148&cid=adClick:collection",
-    tags: "",
-  },
+  
 ];
 const allData = [];
 const failedUrls = [];

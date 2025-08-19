@@ -5,7 +5,7 @@ import {
 } from "./formatter.js";
 
 export async function extractProductData(page, urlObj) {
-  const { url, tags } = urlObj;
+  const { url, tags,brand , typeitem } = urlObj;
   await page.goto(url, { waitUntil: "load", timeout: 70000 });
 
   const handle = formatHandleFromUrl(url);
@@ -166,6 +166,8 @@ export async function extractProductData(page, urlObj) {
     "Variant Fulfillment Service": "manual",
     "Variant Inventory Policy": "deny",
     "Variant Inventory Tracker": "shopify",
+    "product.metafields.custom.brand": brand || "",
+  "product.metafields.custom.typeitem": typeitem || "",
     Type: "USA Products",
     Vendor: "simon",
     Published: "TRUE",
@@ -190,6 +192,8 @@ export async function extractProductData(page, urlObj) {
       "Variant Fulfillment Service": "",
       "Variant Inventory Policy": "",
       "Variant Inventory Tracker": "",
+      "product.metafields.custom.brand": brand || "",
+  "product.metafields.custom.typeitem": typeitem || "",
       Type: "",
       Vendor: "",
       Published: "",
@@ -205,7 +209,7 @@ export async function extractProductData(page, urlObj) {
       "Option1 Name": "",
       "Option1 Value": "",
       "Option2 Name": "",
-      "Option2 Value": "",
+      "Option2 Value": uniqueColors[0] || "",
       "Variant Price": "",
       "Cost per item": "",
       "Image Src": img.image,
@@ -213,6 +217,8 @@ export async function extractProductData(page, urlObj) {
       "Variant Fulfillment Service": "",
       "Variant Inventory Policy": "",
       "Variant Inventory Tracker": "",
+      "product.metafields.custom.brand":"",
+  "product.metafields.custom.typeitem":  "",
       Type: "",
       Vendor: "",
       Published: "",
