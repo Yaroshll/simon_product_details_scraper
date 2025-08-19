@@ -31,58 +31,131 @@ async function readInlineHeroSrc(page) {
   }
   return "";
 }
-
+/**
+ * Find & click the correct zoom button tied to the visible hero image,
+ * then return a stable hi-res PhotoSwipe src (different from prevSrc).
+ */
 async function openZoomAndGetHiResSrc(page, prevSrc = "") {
-  // Click zoom button → wait PhotoSwipe → choose visible non-placeholder → ensure high-res
-  const zoomBtn = page.locator('button.js-photoswipe__zoom');
-  await zoomBtn.waitFor({ state: "visible", timeout: 10000 });
-  await zoomBtn.click();
+  // Helper: normalize protocol-relative URLs
+  const toAbs = (s) => (s && s.startsWith("//") ? `https:${s}` : s || "");
 
-  // Wait a visible image exists
+  // 1) Get the currently visible hero image element
+  const hero = page.locator(".pdp-main-img:visible").first();
+
+  // Some themes don’t use .pdp-main-img; widen the net if missing
+  const hasHero = await hero.count().then(c => c > 0);
+  const heroAlt = hasHero ? hero
+    : page.locator(
+        ".product-main-image img:visible, .product__main-photos img:visible"
+      ).first();
+
+  // 2) Try to hover the image container to reveal the zoom button
+  try {
+    const container = heroAlt.locator("xpath=ancestor-or-self::*[contains(@class,'pdp-main-img-wrap') or contains(@class,'image-wrap')][1]");
+    await container.hover({ trial: true }).catch(() => {});
+    await container.hover().catch(() => {});
+  } catch {}
+
+  // 3) Prefer the zoom button inside the same image container
+  async function findZoomButtonHandle() {
+    // Try “closest” container → query for a button within
+    const handle = await heroAlt.elementHandle();
+    if (handle) {
+      const btnInContainer = await handle.evaluateHandle((img) => {
+        const cont =
+          img.closest(".pdp-main-img-wrap") ||
+          img.closest(".image-wrap") ||
+          img.parentElement;
+        if (!cont) return null;
+        return (
+          cont.querySelector("button.js-photoswipe__zoom") ||
+          cont.querySelector("button.product__photo-zoom")
+        );
+      });
+      if (btnInContainer && (await btnInContainer.asElement())) {
+        return btnInContainer.asElement();
+      }
+    }
+
+    // Fallback: any visible zoom button
+    const visibleBtn = page.locator("button.js-photoswipe__zoom:visible").first();
+    if (await visibleBtn.count()) return visibleBtn.elementHandle();
+
+    // Last resort: first button in DOM (will force-click)
+    const anyBtn = page.locator("button.js-photoswipe__zoom").first();
+    if (await anyBtn.count()) return anyBtn.elementHandle();
+
+    return null;
+  }
+
+  const btnHandle = await findZoomButtonHandle();
+
+  // 4) Open zoom: click button if we found one, else click the image
+  let opened = false;
+  if (btnHandle) {
+    try {
+      // Try normal click first
+      await btnHandle.click({ timeout: 3000 });
+      opened = true;
+    } catch {
+      // Force click (button may be present but “not visible”)
+      try {
+        await btnHandle.click({ force: true, timeout: 3000 });
+        opened = true;
+      } catch {}
+    }
+  }
+  if (!opened) {
+    // Click the hero image itself (many themes bind zoom to the image)
+    try {
+      await heroAlt.click({ force: true, timeout: 3000 });
+      opened = true;
+    } catch {}
+  }
+
+  // 5) Wait for PhotoSwipe to appear
   await page.waitForSelector(".pswp__img", { state: "visible", timeout: 10000 });
 
-  // Wait until we have a "new" (not placeholder) src that differs from prevSrc and is reasonably large
-  const newSrc = await page.waitForFunction(() => {
-    const imgs = Array.from(document.querySelectorAll(".pswp__img"));
-    const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
-    if (!visible) return null;
-    const isPlaceholder = visible.classList.contains("pswp__img--placeholder");
-    const src = visible.getAttribute("src") || "";
-    if (!src) return null;
-
-    // Surface values to outer scope
-    return { src, naturalWidth: visible.naturalWidth, isPlaceholder };
-  }, {}, { polling: 100, timeout: 15000 }).then(async (val) => {
-    // poll until it’s not placeholder, different from prev, and big enough
-    for (let i = 0; i < 50; i++) {
-      const v = await page.evaluate(() => {
-        const imgs = Array.from(document.querySelectorAll(".pswp__img"));
-        const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
-        if (!visible) return { src: "", naturalWidth: 0, isPlaceholder: true };
-        return {
-          src: visible.getAttribute("src") || "",
-          naturalWidth: visible.naturalWidth || 0,
-          isPlaceholder: visible.classList.contains("pswp__img--placeholder"),
-        };
-      });
-      const srcAbs = toAbsoluteUrl(v.src);
-      const changed = prevSrc ? srcAbs !== toAbsoluteUrl(prevSrc) : true;
-      if (v.src && !v.isPlaceholder && v.naturalWidth >= 1000 && changed) return srcAbs;
-      await page.waitForTimeout(120);
+  // 6) Wait for a non-placeholder visible image whose src differs from prevSrc
+  const prevAbs = toAbs(prevSrc);
+  let srcAbs = "";
+  for (let i = 0; i < 60; i++) {
+    const v = await page.evaluate(() => {
+      const imgs = Array.from(document.querySelectorAll(".pswp__img"));
+      const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
+      if (!visible) return { src: "", n: 0, placeholder: true };
+      return {
+        src: visible.getAttribute("src") || "",
+        n: visible.naturalWidth || 0,
+        placeholder: visible.classList.contains("pswp__img--placeholder"),
+      };
+    });
+    const candidate = toAbs(v.src);
+    const changed = prevAbs ? candidate !== prevAbs : Boolean(candidate);
+    if (candidate && !v.placeholder && v.n >= 1000 && changed) {
+      srcAbs = candidate;
+      break;
     }
-    // Fallback: first non-empty visible src
+    await page.waitForTimeout(120);
+  }
+
+  // Fallback: grab any visible .pswp__img src
+  if (!srcAbs) {
     const fallback = await page.$$eval(".pswp__img", (imgs) => {
-      const v = imgs.find((img) => getComputedStyle(img).display !== "none" && img.getAttribute("src"));
+      const v = imgs.find(
+        (img) => getComputedStyle(img).display !== "none" && img.getAttribute("src")
+      );
       return v ? v.getAttribute("src") : "";
     });
-    return toAbsoluteUrl(fallback || "");
-  });
+    srcAbs = toAbs(fallback);
+  }
 
-  // Close modal
+  // 7) Close zoom
   try { await page.keyboard.press("Escape"); } catch {}
 
-  return newSrc || "";
+  return srcAbs;
 }
+
 
 /**
  * After clicking a color, wait for the "hero" image URL to actually change
