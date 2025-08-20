@@ -17,7 +17,6 @@ function cssEscapeValue(s = "") {
 }
 
 async function readInlineHeroSrc(page) {
-  // Try multiple hero selectors; return the best URL we can get
   const sel = [".pdp-main-img", ".product-main-image img", ".product__main-photos img"];
   for (const s of sel) {
     const exists = await page.$(s);
@@ -37,34 +36,59 @@ async function readInlineHeroSrc(page) {
   return "";
 }
 
+/* -------------------- thumbnails -------------------- */
+
+// return a locator to all gallery thumbnail items (covers common Shopify themes)
+function thumbnailsLocator(page) {
+  return page.locator(
+    [
+      ".product__thumb",
+      ".thumbnail-list__item",
+      ".product-thumbnails li",
+      ".product__thumbnails .thumbnail",
+      ".product-gallery__thumbnail",
+    ].join(", ")
+  );
+}
+
+// click Nth thumbnail (0-based) and wait hero image to actually change
+async function clickThumbnailAndWait(page, idx, prevInlineSrc) {
+  const thumbs = thumbnailsLocator(page);
+  const count = await thumbs.count();
+  if (!count) return prevInlineSrc;
+
+  const item = thumbs.nth(idx);
+  const img = item.locator("img").first();
+  if (await img.count()) {
+    await img.click({ timeout: 8000 }).catch(async () => {
+      await item.click({ timeout: 8000, force: true });
+    });
+  } else {
+    await item.click({ timeout: 8000, force: true });
+  }
+
+  await page.waitForTimeout(120);
+  await page.waitForLoadState("networkidle").catch(() => {});
+  const newSrc = await waitForHeroSrcChange(page, prevInlineSrc);
+  return newSrc;
+}
+
 /* -------------------- zoom -> hi-res -------------------- */
 
-/**
- * Find & click the correct zoom button tied to the visible hero image,
- * then return a stable hi-res PhotoSwipe src (different from prevSrc).
- */
 async function openZoomAndGetHiResSrc(page, prevSrc = "") {
-  // Helper: normalize protocol-relative URLs
   const toAbs = (s) => (s && s.startsWith("//") ? `https:${s}` : s || "");
 
-  // 1) Get the currently visible hero image element
   const hero = page.locator(".pdp-main-img:visible").first();
-
-  // Some themes don’t use .pdp-main-img; widen the net if missing
   const hasHero = await hero.count().then(c => c > 0);
   const heroAlt = hasHero ? hero
-    : page.locator(
-        ".product-main-image img:visible, .product__main-photos img:visible"
-      ).first();
+    : page.locator(".product-main-image img:visible, .product__main-photos img:visible").first();
 
-  // 2) Try to hover the image container to reveal the zoom button
   try {
     const container = heroAlt.locator("xpath=ancestor-or-self::*[contains(@class,'pdp-main-img-wrap') or contains(@class,'image-wrap')][1]");
     await container.hover({ trial: true }).catch(() => {});
     await container.hover().catch(() => {});
   } catch {}
 
-  // 3) Prefer the zoom button inside the same image container
   async function findZoomButtonHandle() {
     const handle = await heroAlt.elementHandle();
     if (handle) {
@@ -94,7 +118,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
 
   const btnHandle = await findZoomButtonHandle();
 
-  // 4) Open zoom: click button if we found one, else click the image
   let opened = false;
   if (btnHandle) {
     try {
@@ -114,15 +137,12 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     } catch {}
   }
 
-  // 5) Wait for PhotoSwipe to appear
   try {
     await page.waitForSelector(".pswp__img", { state: "visible", timeout: 8000 });
   } catch {
-    // If no PhotoSwipe, return inline hero (some PDPs don’t use zoom)
     return await readInlineHeroSrc(page);
   }
 
-  // 6) Wait for a non-placeholder visible image whose src differs from prevSrc
   const prevAbs = toAbs(prevSrc);
   let srcAbs = "";
   for (let i = 0; i < 60; i++) {
@@ -145,7 +165,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     await page.waitForTimeout(120);
   }
 
-  // Fallback: grab any visible .pswp__img src
   if (!srcAbs) {
     const fallback = await page.$$eval(".pswp__img", (imgs) => {
       const v = imgs.find(
@@ -156,17 +175,12 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     srcAbs = toAbs(fallback);
   }
 
-  // 7) Close zoom
   try { await page.keyboard.press("Escape"); } catch {}
-
   return srcAbs;
 }
 
+/* -------------------- image swap wait -------------------- */
 
-/**
- * After clicking a color, wait for the "hero" image URL to actually change
- * Some sites keep the same node and swap only the src/srcset/currentSrc.
- */
 async function waitForHeroSrcChange(page, prevSrc) {
   const normalize = (s) => toAbsoluteUrl(s || "");
   const prev = normalize(prevSrc);
@@ -179,9 +193,9 @@ async function waitForHeroSrcChange(page, prevSrc) {
   return prev;
 }
 
-/* -------------------- selection helpers (robust) -------------------- */
+/* -------------------- robust selection helpers -------------------- */
 
-// Return the currently-checked color value (if any) — tries multiple patterns
+// Return the currently-checked color value (if any)
 async function getCheckedColor(page) {
   return await page.evaluate(() => {
     const candidates = [
@@ -254,9 +268,7 @@ async function waitForColorSelected(page, color, timeoutMs = 12000) {
 }
 
 /**
- * Click a color label (provided) and wait until:
- *   A) that color is “selected” (radios/labels) OR
- *   B) the hero image swaps from prevInlineSrc
+ * Click a color label and wait until selected or hero swaps.
  * Returns { checkedColor, newInlineSrc }.
  */
 async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
@@ -274,13 +286,13 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   }
 
   await page.waitForTimeout(150);
-  const selected = await waitForColorSelected(page, color, 12000);
+  await waitForColorSelected(page, color, 12000);
 
   await page.waitForLoadState("networkidle").catch(() => {});
   const newInlineSrc = await waitForHeroSrcChange(page, prevInlineSrc);
 
   const checkedColor = await getCheckedColor(page);
-  return { checkedColor: checkedColor || (selected ? color : ""), newInlineSrc };
+  return { checkedColor: checkedColor || color, newInlineSrc };
 }
 
 /* -------------------- main -------------------- */
@@ -296,7 +308,8 @@ export async function extractProductData(page, urlObj) {
   const priceText = await page.textContent("span.product__price--compare");
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
-  // Extract option1 (Size etc.)
+
+  // option1 (e.g., Size) from data-value
   const option1Div = await page.$('.variant-input[data-index="option1"][data-value]');
   const option1Name = option1Div
     ? (await option1Div.$eval('input[type="radio"]', el => el.getAttribute("name"))) || ""
@@ -333,38 +346,53 @@ export async function extractProductData(page, urlObj) {
     }
   }
 
-  // Helper to capture hi-res for whatever color is currently selected
+  // capture the hi-res for the currently selected hero (after any swap)
   async function captureHiResForCurrentColor(color, prevInlineSrc = "") {
     const ensuredSrc = await waitForHeroSrcChange(page, prevInlineSrc);
     const hiRes = await openZoomAndGetHiResSrc(page, ensuredSrc);
     const srcFinal = hiRes || (await readInlineHeroSrc(page)) || "";
-
     if (srcFinal) {
-      images.push({ handle, image: srcFinal, color });
-      savedImages.add(srcFinal);
-    } else {
-      const fallback = [...savedImages][0] || "";
-      images.push({ handle, image: fallback, color });
+      if (!savedImages.has(srcFinal)) {
+        images.push({ handle, image: srcFinal, color });
+        savedImages.add(srcFinal);
+      }
     }
   }
 
-  // No colors
+  // No colors → capture hero (and all thumbnails if present)
   if (variantDetails.length === 0) {
-    const prev = await readInlineHeroSrc(page);
-    await captureHiResForCurrentColor("", prev);
+    let currentInline = await readInlineHeroSrc(page);
+    const thumbs = thumbnailsLocator(page);
+    const tCount = await thumbs.count();
+    if (!tCount) {
+      await captureHiResForCurrentColor("", currentInline);
+    } else {
+      for (let i = 0; i < tCount; i++) {
+        currentInline = await clickThumbnailAndWait(page, i, currentInline);
+        await captureHiResForCurrentColor("", currentInline);
+      }
+    }
   }
-  // Single color
+  // Single color → SAVE ALL IMAGES
   else if (variantDetails.length === 1) {
-    const color = variantDetails[0].value;
-    const prev = await readInlineHeroSrc(page);
-    const checked = await getCheckedColor(page);
-    await captureHiResForCurrentColor(checked || color, prev);
+    const color = variantDetails[0].value || (await getCheckedColor(page)) || "";
+    let currentInline = await readInlineHeroSrc(page);
+    const thumbs = thumbnailsLocator(page);
+    const tCount = await thumbs.count();
+    if (!tCount) {
+      await captureHiResForCurrentColor(color, currentInline);
+    } else {
+      for (let i = 0; i < tCount; i++) {
+        currentInline = await clickThumbnailAndWait(page, i, currentInline);
+        await captureHiResForCurrentColor(color, currentInline);
+      }
+    }
   }
-  // Multiple colors
+  // Multiple colors → CLICK COLOR → SAVE value → ZOOM → SAVE IMAGE (correct mapping)
   else {
     const sorted = variantDetails.sort((a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0));
 
-    // 1) handle the already-selected color first (no click)
+    // initially selected color first
     for (const v of sorted) {
       const input = await page.locator(`input[name="Color"][value="${cssEscapeValue(v.value)}"]`).elementHandle().catch(() => null);
       const checked = input ? await input.evaluate((el) => el.checked).catch(() => false) : false;
@@ -376,14 +404,34 @@ export async function extractProductData(page, urlObj) {
       }
     }
 
-    // 2) iterate the rest; click label → confirm (or image swap) → capture
+    // other colors
     for (const v of sorted) {
       const input = await page.locator(`input[name="Color"][value="${cssEscapeValue(v.value)}"]`).elementHandle().catch(() => null);
       const isChecked = input ? await input.evaluate((el) => el.checked).catch(() => false) : false;
       if (!isChecked && !v.isChecked) {
         const prevInline = await readInlineHeroSrc(page);
+
+        // CLICK COLOR, CONFIRM, ZOOM, SAVE
         const { checkedColor, newInlineSrc } = await selectColorAndWait(page, v.labelLocator, v.value, prevInline);
+
+        // default: one image per color (correctly matched)
         await captureHiResForCurrentColor(checkedColor || v.value, newInlineSrc);
+
+        // if you want ALL thumbs per color, uncomment:
+        /*
+        const colorValue = checkedColor || v.value;
+        let currentInline = newInlineSrc;
+        const thumbs = thumbnailsLocator(page);
+        const tCount = await thumbs.count();
+        if (!tCount) {
+          await captureHiResForCurrentColor(colorValue, currentInline);
+        } else {
+          for (let i = 0; i < tCount; i++) {
+            currentInline = await clickThumbnailAndWait(page, i, currentInline);
+            await captureHiResForCurrentColor(colorValue, currentInline);
+          }
+        }
+        */
       }
     }
   }

@@ -9,21 +9,7 @@ const urls = [
     brand: "Coach Outlet", 
     typeitem: "Handbag"  
   },
-  
-  {
-    url: "https://shop.simon.com/products/davina-vegan-leather-women-s-tote-bag-with-wallet?crpid=6992480469052&cid=adClick:collection",
-    tags: "",
-    brand: "Coach Outlet", 
-    typeitem: "Handbag"  
-  },
-  
-  {
-    url: "https://shop.simon.com/products/coach-outlet-corner-zip-wristlet-in-signature-canvas-with-stripe-1?crpid=7911827800124&cid=adClick:collection",
-    tags: "",
-    brand: "Coach Outlet", 
-    typeitem: "Handbag"  
-  },
-  
+
   {
     url: "https://shop.simon.com/products/puma-x-harry-potter-womens-polo-shirt?crpid=8598900539452",
     tags: "",
