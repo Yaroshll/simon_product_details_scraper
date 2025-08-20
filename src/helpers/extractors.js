@@ -300,7 +300,7 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
 
-  await page.goto(url, { waitUntil: "load", timeout: 70000 });
+  await page.goto(url, { waitUntil: "load", timeout: 7000 });
   await page.waitForLoadState("domcontentloaded");
 
   const handle = formatHandleFromUrl(url);
@@ -309,15 +309,18 @@ export async function extractProductData(page, urlObj) {
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
 
-  // option1 (e.g., Size) from data-value
-  const option1Div = await page.$('.variant-input[data-index="option1"][data-value]');
-  const option1Name = option1Div
-    ? (await option1Div.$eval('input[type="radio"]', el => el.getAttribute("name"))) || ""
-    : "";
-  const option1Value = option1Div
-    ? (await option1Div.getAttribute("data-value")) || ""
-    : "";
 
+// Find the option1 (Size) fieldset and collect ALL size values from data-value
+const sizeValues = await page.$$eval(
+  'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value], ' +
+  'fieldset[data-index="option1"] .variant-input[data-index="option1"][data-value]',
+  (nodes) =>
+    Array.from(nodes)
+      .map(n => n.getAttribute('data-value'))
+      .filter(Boolean)
+);
+const option1Name  = sizeValues.length ? "Size" : "";
+const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
   const description = (await page.textContent(".pdp-details-txt"))?.trim() || "";
 
   const images = [];
