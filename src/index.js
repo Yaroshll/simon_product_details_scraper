@@ -11,13 +11,6 @@ const urls = [
   },
   
   {
-    url: "https://shop.simon.com/products/darla-travel-gift-for-women-set-3-pieces?crpid=7000396169276&cid=adClick:collection",
-    tags: "",
-    brand: "Coach Outlet", 
-    typeitem: "Handbag"  
-  },
-  
-  {
     url: "https://shop.simon.com/products/davina-vegan-leather-women-s-tote-bag-with-wallet?crpid=6992480469052&cid=adClick:collection",
     tags: "",
     brand: "Coach Outlet", 

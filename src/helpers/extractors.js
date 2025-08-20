@@ -296,9 +296,15 @@ export async function extractProductData(page, urlObj) {
   const priceText = await page.textContent("span.product__price--compare");
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
-  const option1Label = await page.textContent("label.variant__label");
-  const option1Name = option1Label?.match(/^\s*(\w+)/)?.[1]?.trim() || "";
-  const option1Value = option1Label?.match(/\((.*?)\)/)?.[1]?.trim() || "";
+  // Extract option1 (Size etc.)
+  const option1Div = await page.$('.variant-input[data-index="option1"][data-value]');
+  const option1Name = option1Div
+    ? (await option1Div.$eval('input[type="radio"]', el => el.getAttribute("name"))) || ""
+    : "";
+  const option1Value = option1Div
+    ? (await option1Div.getAttribute("data-value")) || ""
+    : "";
+
   const description = (await page.textContent(".pdp-details-txt"))?.trim() || "";
 
   const images = [];
