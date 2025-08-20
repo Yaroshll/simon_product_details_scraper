@@ -4,9 +4,37 @@ import { saveToCSV } from "./helpers/excelWriter.js";
 
 const urls = [
   {
-    url: "https://shop.simon.com/products/coach-outlet-city-tote-bag-in-signature-canvas?crpid=7913406267452&cid=adClick%3Acollection&variant=42616607637564",
+    url: "https://shop.simon.com/products/fossil-womens-sydney-leather-satchel-6?crpid=7105954578492&cid=adClick:collection",
     tags: "",
     brand: "Coach Outlet", 
+    typeitem: "Handbag"  
+  },
+  
+  {
+    url: "https://shop.simon.com/products/darla-travel-gift-for-women-set-3-pieces?crpid=7000396169276&cid=adClick:collection",
+    tags: "",
+    brand: "Coach Outlet", 
+    typeitem: "Handbag"  
+  },
+  
+  {
+    url: "https://shop.simon.com/products/davina-vegan-leather-women-s-tote-bag-with-wallet?crpid=6992480469052&cid=adClick:collection",
+    tags: "",
+    brand: "Coach Outlet", 
+    typeitem: "Handbag"  
+  },
+  
+  {
+    url: "https://shop.simon.com/products/coach-outlet-corner-zip-wristlet-in-signature-canvas-with-stripe-1?crpid=7911827800124&cid=adClick:collection",
+    tags: "",
+    brand: "Coach Outlet", 
+    typeitem: "Handbag"  
+  },
+  
+  {
+    url: "https://shop.simon.com/products/puma-x-harry-potter-womens-polo-shirt?crpid=8598900539452",
+    tags: "",
+    brand: "Coach Outdlet", 
     typeitem: "Handbag"  
   }
   
