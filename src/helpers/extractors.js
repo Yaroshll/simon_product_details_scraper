@@ -11,6 +11,11 @@ function toAbsoluteUrl(src) {
   return src.startsWith("//") ? `https:${src}` : src;
 }
 
+// Escape a string for CSS attribute selectors like [value="..."]
+function cssEscapeValue(s = "") {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 async function readInlineHeroSrc(page) {
   // Try multiple hero selectors; return the best URL we can get
   const sel = [".pdp-main-img", ".product-main-image img", ".product__main-photos img"];
@@ -61,7 +66,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
 
   // 3) Prefer the zoom button inside the same image container
   async function findZoomButtonHandle() {
-    // Try “closest” container → query for a button within
     const handle = await heroAlt.elementHandle();
     if (handle) {
       const btnInContainer = await handle.evaluateHandle((img) => {
@@ -79,12 +83,9 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
         return btnInContainer.asElement();
       }
     }
-
-    // Fallback: any visible zoom button
     const visibleBtn = page.locator("button.js-photoswipe__zoom:visible").first();
     if (await visibleBtn.count()) return visibleBtn.elementHandle();
 
-    // Last resort: first button in DOM (will force-click)
     const anyBtn = page.locator("button.js-photoswipe__zoom").first();
     if (await anyBtn.count()) return anyBtn.elementHandle();
 
@@ -97,11 +98,9 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   let opened = false;
   if (btnHandle) {
     try {
-      // Try normal click first
       await btnHandle.click({ timeout: 3000 });
       opened = true;
     } catch {
-      // Force click (button may be present but “not visible”)
       try {
         await btnHandle.click({ force: true, timeout: 3000 });
         opened = true;
@@ -109,7 +108,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     }
   }
   if (!opened) {
-    // Click the hero image itself (many themes bind zoom to the image)
     try {
       await heroAlt.click({ force: true, timeout: 3000 });
       opened = true;
@@ -117,7 +115,12 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   }
 
   // 5) Wait for PhotoSwipe to appear
-  await page.waitForSelector(".pswp__img", { state: "visible", timeout: 10000 });
+  try {
+    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 8000 });
+  } catch {
+    // If no PhotoSwipe, return inline hero (some PDPs don’t use zoom)
+    return await readInlineHeroSrc(page);
+  }
 
   // 6) Wait for a non-placeholder visible image whose src differs from prevSrc
   const prevAbs = toAbs(prevSrc);
@@ -159,6 +162,7 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   return srcAbs;
 }
 
+
 /**
  * After clicking a color, wait for the "hero" image URL to actually change
  * Some sites keep the same node and swap only the src/srcset/currentSrc.
@@ -167,60 +171,116 @@ async function waitForHeroSrcChange(page, prevSrc) {
   const normalize = (s) => toAbsoluteUrl(s || "");
   const prev = normalize(prevSrc);
 
-  // Poll both inline hero and PhotoSwipe candidate (if open later)
   for (let i = 0; i < 80; i++) {
     const current = await readInlineHeroSrc(page);
     if (current && normalize(current) !== prev) return current;
     await page.waitForTimeout(120);
   }
-  // If hero never changes (rare), return prev; zoom stage will still enforce change
   return prev;
 }
 
-/* -------------------- NEW/UPDATED HELPERS -------------------- */
+/* -------------------- selection helpers (robust) -------------------- */
 
-// Return the currently-checked color value (if any)
+// Return the currently-checked color value (if any) — tries multiple patterns
 async function getCheckedColor(page) {
   return await page.evaluate(() => {
-    const el = document.querySelector('input[name="Color"]:checked');
-    return el ? el.value : "";
+    const candidates = [
+      'input[name="Color"]:checked',
+      'input[name="options[Color]"]:checked',
+      'input[name="option-0"]:checked',
+      'input[type="radio"][checked]',
+    ];
+    for (const sel of candidates) {
+      const el = document.querySelector(sel);
+      if (el && el.value) return el.value;
+    }
+    const selLbl = Array.from(document.querySelectorAll("label"))
+      .find(l =>
+        l.classList.contains("is-selected") ||
+        l.getAttribute("aria-pressed") === "true" ||
+        l.getAttribute("aria-checked") === "true"
+      );
+    if (selLbl) {
+      const v = selLbl.getAttribute("data-value") || selLbl.textContent?.trim();
+      if (v) return v;
+    }
+    return "";
   });
 }
 
+async function waitForColorSelected(page, color, timeoutMs = 12000) {
+  const value = cssEscapeValue(color);
+  try {
+    await page.waitForFunction(
+      (c) => {
+        const radios = [
+          `input[name="Color"][value="${c}"]`,
+          `input[name="options[Color]"][value="${c}"]`,
+          `input[name="option-0"][value="${c}"]`,
+          `input[type="radio"][value="${c}"]`
+        ];
+        for (const r of radios) {
+          const el = document.querySelector(r);
+          if (el && (el.checked || el.getAttribute("checked") === "true")) return true;
+        }
+        const labels = Array.from(document.querySelectorAll('label, [data-value]'));
+        for (const l of labels) {
+          const val =
+            l.getAttribute("data-value") ||
+            l.getAttribute("data-swatch-value") ||
+            l.textContent?.trim();
+          if (!val) continue;
+          if (val.toLowerCase() === c.toLowerCase()) {
+            if (
+              l.classList.contains("is-selected") ||
+              l.classList.contains("active") ||
+              l.getAttribute("aria-pressed") === "true" ||
+              l.getAttribute("aria-checked") === "true" ||
+              l.classList.contains("selected")
+            ) {
+              return true;
+            }
+          }
+        }
+        return false;
+      },
+      value,
+      { timeout: timeoutMs }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Click a given color's label and wait until:
- *   1) the input[name="Color"][value="{color}"] is checked
- *   2) the hero image actually swaps from prevInlineSrc
- * Returns the confirmed checked color (from DOM) and the *new* inline hero src.
+ * Click a color label (provided) and wait until:
+ *   A) that color is “selected” (radios/labels) OR
+ *   B) the hero image swaps from prevInlineSrc
+ * Returns { checkedColor, newInlineSrc }.
  */
-async function selectColorAndWait(page, color, prevInlineSrc) {
-  // Click its label (safer than clicking input)
-  await page.locator(`label.variant__button-label[for="option-${color}"], label.variant__button-label:has(input[value="${color}"])`).first().click({ timeout: 20000 }).catch(async () => {
-    // Fallback: click by value hook
-    const input = page.locator(`input[name="Color"][value="${color}"]`);
-    if (await input.count()) await input.click({ timeout: 20000, force: true });
-  });
+async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
+  if (labelLocator) {
+    await labelLocator.click({ timeout: 20000 }).catch(async () => {
+      const vEsc = cssEscapeValue(color);
+      const input = page.locator(
+        `input[name="Color"][value="${vEsc}"], ` +
+        `input[name="options[Color]"][value="${vEsc}"], ` +
+        `input[name="option-0"][value="${vEsc}"], ` +
+        `input[type="radio"][value="${vEsc}"]`
+      );
+      if (await input.count()) await input.first().click({ force: true, timeout: 20000 });
+    });
+  }
 
-  // Wait radio becomes checked
-  await page.waitForFunction(
-    (c) => {
-      const el = document.querySelector(`input[name="Color"][value="${c}"]`);
-      return !!el && el.checked === true;
-    },
-    color,
-    { timeout: 10000 }
-  );
+  await page.waitForTimeout(150);
+  const selected = await waitForColorSelected(page, color, 12000);
 
-  // Let gallery/network settle a bit
   await page.waitForLoadState("networkidle").catch(() => {});
-  await page.waitForTimeout(200);
-
-  // Ensure hero actually changes
   const newInlineSrc = await waitForHeroSrcChange(page, prevInlineSrc);
 
-  // Read the *actual* checked color from DOM for ground truth
   const checkedColor = await getCheckedColor(page);
-  return { checkedColor, newInlineSrc };
+  return { checkedColor: checkedColor || (selected ? color : ""), newInlineSrc };
 }
 
 /* -------------------- main -------------------- */
@@ -244,7 +304,7 @@ export async function extractProductData(page, urlObj) {
   const images = [];
   const savedImages = new Set();
 
-  // Build color list (fieldset by name=Color + .variant-inputs)
+  // Build color list
   const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
   if (colorFieldset) {
@@ -252,14 +312,16 @@ export async function extractProductData(page, urlObj) {
     for (const inputDiv of variantInputs) {
       const value = await inputDiv.getAttribute("data-value");
       const inputElement = await inputDiv.$('input[type="radio"]');
-      const isChecked = await inputElement?.evaluate((el) => el.checked);
+      const isChecked = await inputElement?.evaluate((el) => el.checked).catch(() => false);
       const labelElement = await inputDiv.$("label.variant__button-label");
       if (value && labelElement) {
         const labelFor = await labelElement.getAttribute("for");
         variantDetails.push({
           value,
           isChecked,
-          labelLocator: page.locator(`label.variant__button-label[for="${labelFor}"]`),
+          labelLocator: labelFor
+            ? page.locator(`label.variant__button-label[for="${labelFor}"]`)
+            : page.locator(`.variant-input[data-value="${cssEscapeValue(value)}"] .variant__button-label`),
         });
       }
     }
@@ -267,19 +329,14 @@ export async function extractProductData(page, urlObj) {
 
   // Helper to capture hi-res for whatever color is currently selected
   async function captureHiResForCurrentColor(color, prevInlineSrc = "") {
-    // Ensure hero really swapped (prevents “first image for all colors”)
     const ensuredSrc = await waitForHeroSrcChange(page, prevInlineSrc);
-
-    // Open zoom and get hi-res different from previous src
     const hiRes = await openZoomAndGetHiResSrc(page, ensuredSrc);
     const srcFinal = hiRes || (await readInlineHeroSrc(page)) || "";
 
     if (srcFinal) {
       images.push({ handle, image: srcFinal, color });
-      // Keep for fallback, but do NOT block same src for another color
       savedImages.add(srcFinal);
     } else {
-      // Last-ditch: reuse first saved (keeps CSV structure)
       const fallback = [...savedImages][0] || "";
       images.push({ handle, image: fallback, color });
     }
@@ -294,41 +351,38 @@ export async function extractProductData(page, urlObj) {
   else if (variantDetails.length === 1) {
     const color = variantDetails[0].value;
     const prev = await readInlineHeroSrc(page);
-    // confirm what's actually checked and use that value
     const checked = await getCheckedColor(page);
     await captureHiResForCurrentColor(checked || color, prev);
   }
   // Multiple colors
   else {
-    // sort puts the already-selected at the front (if any)
     const sorted = variantDetails.sort((a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0));
 
     // 1) handle the already-selected color first (no click)
     for (const v of sorted) {
-      const input = await page.locator(`input[name="Color"][value="${v.value}"]`).elementHandle();
-      const checked = await input?.evaluate((el) => el.checked);
-      if (checked) {
+      const input = await page.locator(`input[name="Color"][value="${cssEscapeValue(v.value)}"]`).elementHandle().catch(() => null);
+      const checked = input ? await input.evaluate((el) => el.checked).catch(() => false) : false;
+      if (checked || v.isChecked) {
         const prev = await readInlineHeroSrc(page);
-        // capture and *store using the color actually checked now*
         const actualChecked = await getCheckedColor(page);
         await captureHiResForCurrentColor(actualChecked || v.value, prev);
-        break; // only one is checked initially
+        break;
       }
     }
 
-    // 2) iterate the rest; *click*, confirm checked, then capture
+    // 2) iterate the rest; click label → confirm (or image swap) → capture
     for (const v of sorted) {
-      const input = await page.locator(`input[name="Color"][value="${v.value}"]`).elementHandle();
-      const isChecked = await input?.evaluate((el) => el.checked);
-      if (!isChecked) {
+      const input = await page.locator(`input[name="Color"][value="${cssEscapeValue(v.value)}"]`).elementHandle().catch(() => null);
+      const isChecked = input ? await input.evaluate((el) => el.checked).catch(() => false) : false;
+      if (!isChecked && !v.isChecked) {
         const prevInline = await readInlineHeroSrc(page);
-        const { checkedColor, newInlineSrc } = await selectColorAndWait(page, v.value, prevInline);
+        const { checkedColor, newInlineSrc } = await selectColorAndWait(page, v.labelLocator, v.value, prevInline);
         await captureHiResForCurrentColor(checkedColor || v.value, newInlineSrc);
       }
     }
   }
 
-  // Map first image per color (the one captured right after selection)
+  // Map first image per color
   const colorImageMap = new Map();
   for (const img of images) {
     if (!colorImageMap.has(img.color)) colorImageMap.set(img.color, img.image);
