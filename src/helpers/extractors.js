@@ -31,6 +31,9 @@ async function readInlineHeroSrc(page) {
   }
   return "";
 }
+
+/* -------------------- zoom -> hi-res -------------------- */
+
 /**
  * Find & click the correct zoom button tied to the visible hero image,
  * then return a stable hi-res PhotoSwipe src (different from prevSrc).
@@ -156,7 +159,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   return srcAbs;
 }
 
-
 /**
  * After clicking a color, wait for the "hero" image URL to actually change
  * Some sites keep the same node and swap only the src/srcset/currentSrc.
@@ -173,6 +175,52 @@ async function waitForHeroSrcChange(page, prevSrc) {
   }
   // If hero never changes (rare), return prev; zoom stage will still enforce change
   return prev;
+}
+
+/* -------------------- NEW/UPDATED HELPERS -------------------- */
+
+// Return the currently-checked color value (if any)
+async function getCheckedColor(page) {
+  return await page.evaluate(() => {
+    const el = document.querySelector('input[name="Color"]:checked');
+    return el ? el.value : "";
+  });
+}
+
+/**
+ * Click a given color's label and wait until:
+ *   1) the input[name="Color"][value="{color}"] is checked
+ *   2) the hero image actually swaps from prevInlineSrc
+ * Returns the confirmed checked color (from DOM) and the *new* inline hero src.
+ */
+async function selectColorAndWait(page, color, prevInlineSrc) {
+  // Click its label (safer than clicking input)
+  await page.locator(`label.variant__button-label[for="option-${color}"], label.variant__button-label:has(input[value="${color}"])`).first().click({ timeout: 20000 }).catch(async () => {
+    // Fallback: click by value hook
+    const input = page.locator(`input[name="Color"][value="${color}"]`);
+    if (await input.count()) await input.click({ timeout: 20000, force: true });
+  });
+
+  // Wait radio becomes checked
+  await page.waitForFunction(
+    (c) => {
+      const el = document.querySelector(`input[name="Color"][value="${c}"]`);
+      return !!el && el.checked === true;
+    },
+    color,
+    { timeout: 10000 }
+  );
+
+  // Let gallery/network settle a bit
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(200);
+
+  // Ensure hero actually changes
+  const newInlineSrc = await waitForHeroSrcChange(page, prevInlineSrc);
+
+  // Read the *actual* checked color from DOM for ground truth
+  const checkedColor = await getCheckedColor(page);
+  return { checkedColor, newInlineSrc };
 }
 
 /* -------------------- main -------------------- */
@@ -196,7 +244,7 @@ export async function extractProductData(page, urlObj) {
   const images = [];
   const savedImages = new Set();
 
-  // Build color list
+  // Build color list (fieldset by name=Color + .variant-inputs)
   const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
   if (colorFieldset) {
@@ -217,18 +265,18 @@ export async function extractProductData(page, urlObj) {
     }
   }
 
-  // Helper to capture high-res for whatever color is currently selected
+  // Helper to capture hi-res for whatever color is currently selected
   async function captureHiResForCurrentColor(color, prevInlineSrc = "") {
     // Ensure hero really swapped (prevents “first image for all colors”)
-    await waitForHeroSrcChange(page, prevInlineSrc);
+    const ensuredSrc = await waitForHeroSrcChange(page, prevInlineSrc);
 
     // Open zoom and get hi-res different from previous src
-    const hiRes = await openZoomAndGetHiResSrc(page, prevInlineSrc);
+    const hiRes = await openZoomAndGetHiResSrc(page, ensuredSrc);
     const srcFinal = hiRes || (await readInlineHeroSrc(page)) || "";
 
     if (srcFinal) {
       images.push({ handle, image: srcFinal, color });
-      // We still remember it to help with fallbacks, but do NOT block same src for another color
+      // Keep for fallback, but do NOT block same src for another color
       savedImages.add(srcFinal);
     } else {
       // Last-ditch: reuse first saved (keeps CSV structure)
@@ -246,53 +294,41 @@ export async function extractProductData(page, urlObj) {
   else if (variantDetails.length === 1) {
     const color = variantDetails[0].value;
     const prev = await readInlineHeroSrc(page);
-    await captureHiResForCurrentColor(color, prev);
+    // confirm what's actually checked and use that value
+    const checked = await getCheckedColor(page);
+    await captureHiResForCurrentColor(checked || color, prev);
   }
   // Multiple colors
   else {
+    // sort puts the already-selected at the front (if any)
     const sorted = variantDetails.sort((a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0));
 
-    // First, grab the already-selected color
+    // 1) handle the already-selected color first (no click)
     for (const v of sorted) {
-      const color = v.value;
-      const input = await page.locator(`input[name="Color"][value="${color}"]`).elementHandle();
+      const input = await page.locator(`input[name="Color"][value="${v.value}"]`).elementHandle();
       const checked = await input?.evaluate((el) => el.checked);
       if (checked) {
         const prev = await readInlineHeroSrc(page);
-        await captureHiResForCurrentColor(color, prev);
+        // capture and *store using the color actually checked now*
+        const actualChecked = await getCheckedColor(page);
+        await captureHiResForCurrentColor(actualChecked || v.value, prev);
+        break; // only one is checked initially
       }
     }
 
-    // Then iterate others
+    // 2) iterate the rest; *click*, confirm checked, then capture
     for (const v of sorted) {
-      const color = v.value;
-      const input = await page.locator(`input[name="Color"][value="${color}"]`).elementHandle();
+      const input = await page.locator(`input[name="Color"][value="${v.value}"]`).elementHandle();
       const isChecked = await input?.evaluate((el) => el.checked);
-
       if (!isChecked) {
         const prevInline = await readInlineHeroSrc(page);
-        await v.labelLocator.click({ timeout: 20000 });
-
-        // Wait radio becomes checked
-        await page.waitForFunction(
-          (c) => {
-            const el = document.querySelector(`input[name="Color"][value="${c}"]`);
-            return !!el && el.checked === true;
-          },
-          color,
-          { timeout: 10000 }
-        );
-
-        // Let the gallery do its thing
-        await page.waitForLoadState("networkidle").catch(() => {});
-        await page.waitForTimeout(200);
-
-        await captureHiResForCurrentColor(color, prevInline);
+        const { checkedColor, newInlineSrc } = await selectColorAndWait(page, v.value, prevInline);
+        await captureHiResForCurrentColor(checkedColor || v.value, newInlineSrc);
       }
     }
   }
 
-  // Map first image per color
+  // Map first image per color (the one captured right after selection)
   const colorImageMap = new Map();
   for (const img of images) {
     if (!colorImageMap.has(img.color)) colorImageMap.set(img.color, img.image);
@@ -306,7 +342,7 @@ export async function extractProductData(page, urlObj) {
     Tags: tags,
     "Option1 Name": option1Name,
     "Option1 Value": option1Value,
-    "Option2 Name": "Color",
+    "Option2 Name": uniqueColors.length ? "Color" : "",
     "Option2 Value": uniqueColors[0] || "",
     "Variant Price": variantPrice.toFixed(2),
     //"Compare At Price": price.toFixed(2),
