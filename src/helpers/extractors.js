@@ -299,7 +299,7 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
 
-  await page.goto(url, { waitUntil: "load", timeout: 70000 });
+  await page.goto(url, { waitUntil: "load", timeout: 7000 });
   await page.waitForLoadState("domcontentloaded");
 
   const handle = formatHandleFromUrl(url);
@@ -317,8 +317,7 @@ export async function extractProductData(page, urlObj) {
         .map(n => n.getAttribute('data-value'))
         .filter(Boolean)
   );
-  const option1Name  = sizeValues.length ? "Size" : "";
-  const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
+  const option1Name = sizeValues.length ? "Size" : "";
   const description = (await page.textContent(".pdp-details-txt"))?.trim() || "";
 
   const images = [];
@@ -442,13 +441,16 @@ export async function extractProductData(page, urlObj) {
   }
   const uniqueColors = [...colorImageMap.keys()];
 
+  const rows = [];
+
+  // Create a main row
   const mainRow = {
     Handle: handle,
     Title: title,
     "Body (HTML)": description,
     Tags: tags,
     "Option1 Name": option1Name,
-    "Option1 Value": option1Value,
+    "Option1 Value": sizeValues.length > 0 ? sizeValues[0] : "",
     "Option2 Name": uniqueColors.length ? "Color" : "",
     "Option2 Value": uniqueColors[0] || "",
     "Variant Price": variantPrice.toFixed(2),
@@ -465,34 +467,71 @@ export async function extractProductData(page, urlObj) {
     Published: "TRUE",
   };
 
-  const rows = [mainRow];
+  rows.push(mainRow);
 
+  // Create rows for additional sizes (only if sizes exist)
+  if (sizeValues.length > 1) {
+    for (let i = 1; i < sizeValues.length; i++) {
+      const sizeRow = {
+        Handle: handle,
+        Title: "",
+        "Body (HTML)": "",
+        Tags: "",
+        "Option1 Name": option1Name,
+        "Option1 Value": sizeValues[i],
+        "Option2 Name": uniqueColors.length ? "Color" : "",
+        "Option2 Value": uniqueColors[0] || "",
+        "Variant Price": variantPrice.toFixed(2),
+        "Cost per item": cost.toFixed(2),
+        "Image Src": colorImageMap.get(uniqueColors[0]) || "",
+        "product.metafields.custom.original_prodect_url": "",
+        "Variant Fulfillment Service": "manual",
+        "Variant Inventory Policy": "deny",
+        "Variant Inventory Tracker": "shopify",
+        "product.metafields.custom.brand": brand || "",
+        "custom.item_type": typeitem || "",
+        Type: "USA Products",
+        Vendor: "simon",
+        Published: "TRUE",
+      };
+      rows.push(sizeRow);
+    }
+  }
+
+  // Add color variants (if any)
   if (uniqueColors.length > 1) {
-    const colorRows = uniqueColors.slice(1).map((color) => ({
-      Handle: handle,
-      Title: "",
-      "Body (HTML)": "",
-      Tags: "",
-      "Option1 Name": "",
-      "Option1 Value": "",
-      "Option2 Name": "Color",
-      "Option2 Value": color,
-      "Variant Price": variantPrice.toFixed(2),
-      "Cost per item": cost.toFixed(2),
-      "Image Src": colorImageMap.get(color) || "",
-      "product.metafields.custom.original_prodect_url": "",
-      "Variant Fulfillment Service": "manual",
-      "Variant Inventory Policy": "deny",
-      "Variant Inventory Tracker": "shopify",
-      "product.metafields.custom.brand": brand || "",
-      "product.metafields.custom.typeitem": typeitem || "",
-      Type: "USA Products",
-      Vendor: "simon",
-      Published: "TRUE",
-    }));
-    rows.push(...colorRows);
-  } else {
-    const extraImages = images.slice(1).map((img) => ({
+    for (let i = 1; i < uniqueColors.length; i++) {
+      const color = uniqueColors[i];
+      const colorRow = {
+        Handle: handle,
+        Title: "",
+        "Body (HTML)": "",
+        Tags: "",
+        "Option1 Name": option1Name,
+        "Option1 Value": sizeValues.length > 0 ? sizeValues[0] : "",
+        "Option2 Name": "Color",
+        "Option2 Value": color,
+        "Variant Price": variantPrice.toFixed(2),
+        "Cost per item": cost.toFixed(2),
+        "Image Src": colorImageMap.get(color) || "",
+        "product.metafields.custom.original_prodect_url": "",
+        "Variant Fulfillment Service": "manual",
+        "Variant Inventory Policy": "deny",
+        "Variant Inventory Tracker": "shopify",
+        "product.metafields.custom.brand": brand || "",
+         "custom.item_type": typeitem || "",
+        Type: "USA Products",
+        Vendor: "simon",
+        Published: "TRUE",
+      };
+      rows.push(colorRow);
+    }
+  }
+
+  // Add additional images as separate rows
+  const extraImages = images.slice(1);
+  for (const img of extraImages) {
+    const imageRow = {
       Handle: handle,
       Title: "",
       "Body (HTML)": "",
@@ -509,12 +548,12 @@ export async function extractProductData(page, urlObj) {
       "Variant Inventory Policy": "",
       "Variant Inventory Tracker": "",
       "product.metafields.custom.brand": "",
-      "product.metafields.custom.typeitem": "",
+       "custom.item_type": "",
       Type: "",
       Vendor: "",
       Published: "",
-    }));
-    rows.push(...extraImages);
+    };
+    rows.push(imageRow);
   }
 
   return rows;
