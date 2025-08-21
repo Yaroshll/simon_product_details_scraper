@@ -4,12 +4,25 @@ import { saveToCSV } from "./helpers/excelWriter.js";
 
 const urls = [
 
+
   {
     url: "https://shop.simon.com/products/puma-x-harry-potter-womens-polo-shirt?crpid=8598900539452",
     tags: "",
     brand: "Coach Outdlet", 
     typeitem: "Handbag"  
-  }
+  },
+  {
+    url: "https://shop.simon.com/products/canvas-logo-mini-tote?crpid=8569825034300",
+    tags: "",
+    brand: "Coach Outdlet", 
+    typeitem: "Handbag"  
+  },
+  {
+    url: "https://shop.simon.com/products/womens-the-lux-block-heel-in-red?crpid=8550513115196",
+    tags: "",
+    brand: "Coach Outdlet", 
+    typeitem: "Handbag"  
+  },
   
 ];
 const allData = [];

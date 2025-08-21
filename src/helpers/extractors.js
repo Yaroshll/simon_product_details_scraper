@@ -11,7 +11,6 @@ function toAbsoluteUrl(src) {
   return src.startsWith("//") ? `https:${src}` : src;
 }
 
-// Escape a string for CSS attribute selectors like [value="..."]
 function cssEscapeValue(s = "") {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
@@ -38,7 +37,6 @@ async function readInlineHeroSrc(page) {
 
 /* -------------------- thumbnails -------------------- */
 
-// return a locator to all gallery thumbnail items (covers common Shopify themes)
 function thumbnailsLocator(page) {
   return page.locator(
     [
@@ -51,7 +49,6 @@ function thumbnailsLocator(page) {
   );
 }
 
-// click Nth thumbnail (0-based) and wait hero image to actually change
 async function clickThumbnailAndWait(page, idx, prevInlineSrc) {
   const thumbs = thumbnailsLocator(page);
   const count = await thumbs.count();
@@ -60,11 +57,11 @@ async function clickThumbnailAndWait(page, idx, prevInlineSrc) {
   const item = thumbs.nth(idx);
   const img = item.locator("img").first();
   if (await img.count()) {
-    await img.click({ timeout: 8000 }).catch(async () => {
-      await item.click({ timeout: 8000, force: true });
+    await img.click({ timeout: 4000 }).catch(async () => {
+      await item.click({ timeout: 4000, force: true });
     });
   } else {
-    await item.click({ timeout: 8000, force: true });
+    await item.click({ timeout: 4000, force: true });
   }
 
   await page.waitForTimeout(120);
@@ -138,14 +135,14 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   }
 
   try {
-    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 8000 });
+    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 3000 });
   } catch {
     return await readInlineHeroSrc(page);
   }
 
   const prevAbs = toAbs(prevSrc);
   let srcAbs = "";
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 40; i++) {
     const v = await page.evaluate(() => {
       const imgs = Array.from(document.querySelectorAll(".pswp__img"));
       const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
@@ -162,7 +159,7 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
       srcAbs = candidate;
       break;
     }
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(100);
   }
 
   if (!srcAbs) {
@@ -185,17 +182,16 @@ async function waitForHeroSrcChange(page, prevSrc) {
   const normalize = (s) => toAbsoluteUrl(s || "");
   const prev = normalize(prevSrc);
 
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 40; i++) {
     const current = await readInlineHeroSrc(page);
     if (current && normalize(current) !== prev) return current;
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(100);
   }
   return prev;
 }
 
 /* -------------------- robust selection helpers -------------------- */
 
-// Return the currently-checked color value (if any)
 async function getCheckedColor(page) {
   return await page.evaluate(() => {
     const candidates = [
@@ -267,10 +263,6 @@ async function waitForColorSelected(page, color, timeoutMs = 12000) {
   }
 }
 
-/**
- * Click a color label and wait until selected or hero swaps.
- * Returns { checkedColor, newInlineSrc }.
- */
 async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   if (labelLocator) {
     await labelLocator.click({ timeout: 20000 }).catch(async () => {
@@ -285,7 +277,7 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
     });
   }
 
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(120);
   await waitForColorSelected(page, color, 12000);
 
   await page.waitForLoadState("networkidle").catch(() => {});
@@ -294,12 +286,13 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   const checkedColor = await getCheckedColor(page);
   return { checkedColor: checkedColor || color, newInlineSrc };
 }
+
 /* -------------------- main -------------------- */
 
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
 
-  await page.goto(url, { waitUntil: "load", timeout: 7000 });
+  await page.goto(url, { waitUntil: "load", timeout: 70000 });
   await page.waitForLoadState("domcontentloaded");
 
   const handle = formatHandleFromUrl(url);
@@ -308,36 +301,32 @@ export async function extractProductData(page, urlObj) {
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
 
-  // Find the option1 (Size) fieldset and collect ALL size values from data-value
+  // sizes (option1): collect all
   const sizeValues = await page.$$eval(
     'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value], ' +
     'fieldset[data-index="option1"] .variant-input[data-index="option1"][data-value]',
-    (nodes) =>
-      Array.from(nodes)
-        .map(n => n.getAttribute('data-value'))
-        .filter(Boolean)
+    (nodes) => Array.from(nodes).map(n => n.getAttribute('data-value')).filter(Boolean)
   );
-  const option1Name = sizeValues.length ? "Size" : "";
+  const hasSizes = sizeValues.length > 0;
+  const option1Name = hasSizes ? "Size" : "";
+  const option1ValueForMain = hasSizes ? sizeValues[0] : "";
+
   const description = (await page.textContent(".pdp-details-txt"))?.trim() || "";
 
   const images = [];
-  const savedImages = new Set();
 
-  // Build color list
+  // Build color list from fieldset
   const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
   if (colorFieldset) {
     const variantInputs = await colorFieldset.$$(".variant-input");
     for (const inputDiv of variantInputs) {
       const value = await inputDiv.getAttribute("data-value");
-      const inputElement = await inputDiv.$('input[type="radio"]');
-      const isChecked = await inputElement?.evaluate((el) => el.checked).catch(() => false);
       const labelElement = await inputDiv.$("label.variant__button-label");
       if (value && labelElement) {
         const labelFor = await labelElement.getAttribute("for");
         variantDetails.push({
           value,
-          isChecked,
           labelLocator: labelFor
             ? page.locator(`label.variant__button-label[for="${labelFor}"]`)
             : page.locator(`.variant-input[data-value="${cssEscapeValue(value)}"] .variant__button-label`),
@@ -346,23 +335,18 @@ export async function extractProductData(page, urlObj) {
     }
   }
 
-  // capture the hi-res for the currently selected hero (after any swap)
+  // Helper: capture hi-res tied to current color
   async function captureHiResForCurrentColor(color, prevInlineSrc = "") {
     const ensuredSrc = await waitForHeroSrcChange(page, prevInlineSrc);
-    const hiRes = await openZoomAndGetHiResSrc(page, ensuredSrc);
+    const hasZoom = await page.locator("button.js-photoswipe__zoom, button.product__photo-zoom").count();
+    const hiRes = hasZoom ? await openZoomAndGetHiResSrc(page, ensuredSrc) : "";
     const srcFinal = hiRes || (await readInlineHeroSrc(page)) || "";
-    if (srcFinal) {
-      if (!savedImages.has(srcFinal)) {
-        images.push({ handle, image: srcFinal, color });
-        savedImages.add(srcFinal);
-        return true;
-      }
-    }
-    return false;
+    images.push({ handle, image: srcFinal, color });
   }
 
-  // No colors → capture hero (and all thumbnails if present)
+  // === Image capture ===
   if (variantDetails.length === 0) {
+    // no colors: capture all thumbnails
     let currentInline = await readInlineHeroSrc(page);
     const thumbs = thumbnailsLocator(page);
     const tCount = await thumbs.count();
@@ -374,9 +358,8 @@ export async function extractProductData(page, urlObj) {
         await captureHiResForCurrentColor("", currentInline);
       }
     }
-  }
-  // Single color → SAVE ALL IMAGES
-  else if (variantDetails.length === 1) {
+  } else if (variantDetails.length === 1) {
+    // single color: save all images for that color
     const color = variantDetails[0].value || (await getCheckedColor(page)) || "";
     let currentInline = await readInlineHeroSrc(page);
     const thumbs = thumbnailsLocator(page);
@@ -389,171 +372,91 @@ export async function extractProductData(page, urlObj) {
         await captureHiResForCurrentColor(color, currentInline);
       }
     }
-  }
-  // Multiple colors → Process each color exactly once
-  else {
-    // Get currently selected color first
+  } else {
+    // multiple colors: selected first, then others (no repeats)
+    const seen = new Set();
+
     const initialCheckedColor = await getCheckedColor(page);
-    let initialColorProcessed = false;
-    
-    // Process the initially selected color first
-    for (const v of variantDetails) {
-      if (v.value === initialCheckedColor || (!initialCheckedColor && v.isChecked)) {
-        const prevInline = await readInlineHeroSrc(page);
-        await captureHiResForCurrentColor(v.value, prevInline);
-        initialColorProcessed = true;
-        break;
+    if (initialCheckedColor) {
+      const prevInline = await readInlineHeroSrc(page);
+      const initEntry = variantDetails.find(v => v.value === initialCheckedColor) || variantDetails[0];
+      if (initEntry?.labelLocator) {
+        const { checkedColor, newInlineSrc } = await selectColorAndWait(page, initEntry.labelLocator, initEntry.value, prevInline);
+        await captureHiResForCurrentColor(checkedColor || initEntry.value, newInlineSrc);
+        seen.add((checkedColor || initEntry.value).toLowerCase());
       }
     }
-    
-    // If no color was initially selected, process the first one
-    if (!initialColorProcessed && variantDetails.length > 0) {
-      const prevInline = await readInlineHeroSrc(page);
-      await captureHiResForCurrentColor(variantDetails[0].value, prevInline);
-    }
-    
-    // Process all other colors exactly once
+
     for (const v of variantDetails) {
-      // Skip if this is the initially selected/processed color
-      if (v.value === initialCheckedColor || (!initialCheckedColor && v.isChecked)) {
-        continue;
-      }
-      
+      const key = (v.value || "").toLowerCase();
+      if (!key || seen.has(key)) continue;
+
       const prevInline = await readInlineHeroSrc(page);
-      
-      // CLICK COLOR, CONFIRM, ZOOM, SAVE
-      const { checkedColor, newInlineSrc } = await selectColorAndWait(
-        page, 
-        v.labelLocator, 
-        v.value, 
-        prevInline
-      );
-      
-      // Capture image for this color
+      const { checkedColor, newInlineSrc } = await selectColorAndWait(page, v.labelLocator, v.value, prevInline);
       await captureHiResForCurrentColor(checkedColor || v.value, newInlineSrc);
+      seen.add((checkedColor || v.value).toLowerCase());
     }
   }
 
-  // Map first image per color
+  // Colors list to build variant matrix
+  const allColorValues = variantDetails.map(v => v.value);
+  const hasColors = allColorValues.length > 0;
+
+  // First image per color
   const colorImageMap = new Map();
   for (const img of images) {
     if (!colorImageMap.has(img.color)) colorImageMap.set(img.color, img.image);
   }
-  const uniqueColors = [...colorImageMap.keys()];
+
+  // === Rows ===
+  function makeRow({ size, color, isMain }) {
+    return {
+      Handle: handle,
+      Title: isMain ? title : "",
+      "Body (HTML)": isMain ? description : "",
+      Tags: isMain ? tags : "",
+      "Option1 Name": hasSizes ? "Size" : "",
+      "Option1 Value": hasSizes ? (size || "") : "",
+      "Option2 Name": hasColors ? "Color" : "",
+      "Option2 Value": hasColors ? (color || "") : "",
+      "Variant Price": variantPrice.toFixed(2),
+      "Cost per item": cost.toFixed(2),
+      "Image Src": hasColors ? (colorImageMap.get(color) || "") : (images[0]?.image || ""),
+      "product.metafields.custom.original_prodect_url": isMain ? url : "",
+      "Variant Fulfillment Service": "manual",
+      "Variant Inventory Policy": "deny",
+      "Variant Inventory Tracker": "shopify",
+      "product.metafields.custom.brand": brand || "",
+      "custom.item_type": typeitem || "",
+      Type: isMain ? "USA Products" : "",
+      Vendor: isMain ? "simon" : "",
+      Published: isMain ? "TRUE" : "",
+    };
+  }
 
   const rows = [];
-
-  // Create a main row
-  const mainRow = {
-    Handle: handle,
-    Title: title,
-    "Body (HTML)": description,
-    Tags: tags,
-    "Option1 Name": option1Name,
-    "Option1 Value": sizeValues.length > 0 ? sizeValues[0] : "",
-    "Option2 Name": uniqueColors.length ? "Color" : "",
-    "Option2 Value": uniqueColors[0] || "",
-    "Variant Price": variantPrice.toFixed(2),
-    "Cost per item": cost.toFixed(2),
-    "Image Src": colorImageMap.get(uniqueColors[0]) || "",
-    "product.metafields.custom.original_prodect_url": url,
-    "Variant Fulfillment Service": "manual",
-    "Variant Inventory Policy": "deny",
-    "Variant Inventory Tracker": "shopify",
-    "product.metafields.custom.brand": brand || "",
-    "product.metafields.custom.typeitem": typeitem || "",
-    Type: "USA Products",
-    Vendor: "simon",
-    Published: "TRUE",
-  };
-
-  rows.push(mainRow);
-
-  // Create rows for additional sizes (only if sizes exist)
-  if (sizeValues.length > 1) {
-    for (let i = 1; i < sizeValues.length; i++) {
-      const sizeRow = {
-        Handle: handle,
-        Title: "",
-        "Body (HTML)": "",
-        Tags: "",
-        "Option1 Name": option1Name,
-        "Option1 Value": sizeValues[i],
-        "Option2 Name": uniqueColors.length ? "Color" : "",
-        "Option2 Value": uniqueColors[0] || "",
-        "Variant Price": variantPrice.toFixed(2),
-        "Cost per item": cost.toFixed(2),
-        "Image Src": colorImageMap.get(uniqueColors[0]) || "",
-        "product.metafields.custom.original_prodect_url": "",
-        "Variant Fulfillment Service": "manual",
-        "Variant Inventory Policy": "deny",
-        "Variant Inventory Tracker": "shopify",
-        "product.metafields.custom.brand": brand || "",
-        "custom.item_type": typeitem || "",
-        Type: "USA Products",
-        Vendor: "simon",
-        Published: "TRUE",
-      };
-      rows.push(sizeRow);
+  if (hasSizes && hasColors) {
+    let first = true;
+    for (const size of sizeValues) {
+      for (const color of allColorValues) {
+        rows.push(makeRow({ size, color, isMain: first }));
+        first = false;
+      }
     }
-  }
-
-  // Add color variants (if any)
-  if (uniqueColors.length > 1) {
-    for (let i = 1; i < uniqueColors.length; i++) {
-      const color = uniqueColors[i];
-      const colorRow = {
-        Handle: handle,
-        Title: "",
-        "Body (HTML)": "",
-        Tags: "",
-        "Option1 Name": option1Name,
-        "Option1 Value": sizeValues.length > 0 ? sizeValues[0] : "",
-        "Option2 Name": "Color",
-        "Option2 Value": color,
-        "Variant Price": variantPrice.toFixed(2),
-        "Cost per item": cost.toFixed(2),
-        "Image Src": colorImageMap.get(color) || "",
-        "product.metafields.custom.original_prodect_url": "",
-        "Variant Fulfillment Service": "manual",
-        "Variant Inventory Policy": "deny",
-        "Variant Inventory Tracker": "shopify",
-        "product.metafields.custom.brand": brand || "",
-         "custom.item_type": typeitem || "",
-        Type: "USA Products",
-        Vendor: "simon",
-        Published: "TRUE",
-      };
-      rows.push(colorRow);
+  } else if (hasSizes && !hasColors) {
+    let first = true;
+    for (const size of sizeValues) {
+      rows.push(makeRow({ size, color: "", isMain: first }));
+      first = false;
     }
-  }
-
-  // Add additional images as separate rows
-  const extraImages = images.slice(1);
-  for (const img of extraImages) {
-    const imageRow = {
-      Handle: handle,
-      Title: "",
-      "Body (HTML)": "",
-      Tags: "",
-      "Option1 Name": "",
-      "Option1 Value": "",
-      "Option2 Name": "",
-      "Option2 Value": "",
-      "Variant Price": "",
-      "Cost per item": "",
-      "Image Src": img.image,
-      "product.metafields.custom.original_prodect_url": "",
-      "Variant Fulfillment Service": "",
-      "Variant Inventory Policy": "",
-      "Variant Inventory Tracker": "",
-      "product.metafields.custom.brand": "",
-       "custom.item_type": "",
-      Type: "",
-      Vendor: "",
-      Published: "",
-    };
-    rows.push(imageRow);
+  } else if (!hasSizes && hasColors) {
+    let first = true;
+    for (const color of allColorValues) {
+      rows.push(makeRow({ size: "", color, isMain: first }));
+      first = false;
+    }
+  } else {
+    rows.push(makeRow({ size: "", color: "", isMain: true }));
   }
 
   return rows;
