@@ -294,7 +294,6 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   const checkedColor = await getCheckedColor(page);
   return { checkedColor: checkedColor || color, newInlineSrc };
 }
-
 /* -------------------- main -------------------- */
 
 export async function extractProductData(page, urlObj) {
@@ -309,18 +308,17 @@ export async function extractProductData(page, urlObj) {
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
 
-
-// Find the option1 (Size) fieldset and collect ALL size values from data-value
-const sizeValues = await page.$$eval(
-  'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value], ' +
-  'fieldset[data-index="option1"] .variant-input[data-index="option1"][data-value]',
-  (nodes) =>
-    Array.from(nodes)
-      .map(n => n.getAttribute('data-value'))
-      .filter(Boolean)
-);
-const option1Name  = sizeValues.length ? "Size" : "";
-const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
+  // Find the option1 (Size) fieldset and collect ALL size values from data-value
+  const sizeValues = await page.$$eval(
+    'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value], ' +
+    'fieldset[data-index="option1"] .variant-input[data-index="option1"][data-value]',
+    (nodes) =>
+      Array.from(nodes)
+        .map(n => n.getAttribute('data-value'))
+        .filter(Boolean)
+  );
+  const option1Name  = sizeValues.length ? "Size" : "";
+  const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
   const description = (await page.textContent(".pdp-details-txt"))?.trim() || "";
 
   const images = [];
@@ -358,8 +356,10 @@ const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
       if (!savedImages.has(srcFinal)) {
         images.push({ handle, image: srcFinal, color });
         savedImages.add(srcFinal);
+        return true;
       }
     }
+    return false;
   }
 
   // No colors → capture hero (and all thumbnails if present)
@@ -391,51 +391,47 @@ const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
       }
     }
   }
-  // Multiple colors → CLICK COLOR → SAVE value → ZOOM → SAVE IMAGE (correct mapping)
+  // Multiple colors → Process each color exactly once
   else {
-    const sorted = variantDetails.sort((a, b) => (b.isChecked ? 1 : 0) - (a.isChecked ? 1 : 0));
-
-    // initially selected color first
-    for (const v of sorted) {
-      const input = await page.locator(`input[name="Color"][value="${cssEscapeValue(v.value)}"]`).elementHandle().catch(() => null);
-      const checked = input ? await input.evaluate((el) => el.checked).catch(() => false) : false;
-      if (checked || v.isChecked) {
-        const prev = await readInlineHeroSrc(page);
-        const actualChecked = await getCheckedColor(page);
-        await captureHiResForCurrentColor(actualChecked || v.value, prev);
+    // Get currently selected color first
+    const initialCheckedColor = await getCheckedColor(page);
+    let initialColorProcessed = false;
+    
+    // Process the initially selected color first
+    for (const v of variantDetails) {
+      if (v.value === initialCheckedColor || (!initialCheckedColor && v.isChecked)) {
+        const prevInline = await readInlineHeroSrc(page);
+        await captureHiResForCurrentColor(v.value, prevInline);
+        initialColorProcessed = true;
         break;
       }
     }
-
-    // other colors
-    for (const v of sorted) {
-      const input = await page.locator(`input[name="Color"][value="${cssEscapeValue(v.value)}"]`).elementHandle().catch(() => null);
-      const isChecked = input ? await input.evaluate((el) => el.checked).catch(() => false) : false;
-      if (!isChecked && !v.isChecked) {
-        const prevInline = await readInlineHeroSrc(page);
-
-        // CLICK COLOR, CONFIRM, ZOOM, SAVE
-        const { checkedColor, newInlineSrc } = await selectColorAndWait(page, v.labelLocator, v.value, prevInline);
-
-        // default: one image per color (correctly matched)
-        await captureHiResForCurrentColor(checkedColor || v.value, newInlineSrc);
-
-        // if you want ALL thumbs per color, uncomment:
-        /*
-        const colorValue = checkedColor || v.value;
-        let currentInline = newInlineSrc;
-        const thumbs = thumbnailsLocator(page);
-        const tCount = await thumbs.count();
-        if (!tCount) {
-          await captureHiResForCurrentColor(colorValue, currentInline);
-        } else {
-          for (let i = 0; i < tCount; i++) {
-            currentInline = await clickThumbnailAndWait(page, i, currentInline);
-            await captureHiResForCurrentColor(colorValue, currentInline);
-          }
-        }
-        */
+    
+    // If no color was initially selected, process the first one
+    if (!initialColorProcessed && variantDetails.length > 0) {
+      const prevInline = await readInlineHeroSrc(page);
+      await captureHiResForCurrentColor(variantDetails[0].value, prevInline);
+    }
+    
+    // Process all other colors exactly once
+    for (const v of variantDetails) {
+      // Skip if this is the initially selected/processed color
+      if (v.value === initialCheckedColor || (!initialCheckedColor && v.isChecked)) {
+        continue;
       }
+      
+      const prevInline = await readInlineHeroSrc(page);
+      
+      // CLICK COLOR, CONFIRM, ZOOM, SAVE
+      const { checkedColor, newInlineSrc } = await selectColorAndWait(
+        page, 
+        v.labelLocator, 
+        v.value, 
+        prevInline
+      );
+      
+      // Capture image for this color
+      await captureHiResForCurrentColor(checkedColor || v.value, newInlineSrc);
     }
   }
 
@@ -456,7 +452,6 @@ const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
     "Option2 Name": uniqueColors.length ? "Color" : "",
     "Option2 Value": uniqueColors[0] || "",
     "Variant Price": variantPrice.toFixed(2),
-    //"Compare At Price": price.toFixed(2),
     "Cost per item": cost.toFixed(2),
     "Image Src": colorImageMap.get(uniqueColors[0]) || "",
     "product.metafields.custom.original_prodect_url": url,
@@ -480,20 +475,20 @@ const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
       Tags: "",
       "Option1 Name": "",
       "Option1 Value": "",
-      "Option2 Name": " ",
+      "Option2 Name": "Color",
       "Option2 Value": color,
-      "Variant Price": "",
-      "Cost per item": "",
+      "Variant Price": variantPrice.toFixed(2),
+      "Cost per item": cost.toFixed(2),
       "Image Src": colorImageMap.get(color) || "",
       "product.metafields.custom.original_prodect_url": "",
-      "Variant Fulfillment Service": "",
-      "Variant Inventory Policy": "",
-      "Variant Inventory Tracker": "",
+      "Variant Fulfillment Service": "manual",
+      "Variant Inventory Policy": "deny",
+      "Variant Inventory Tracker": "shopify",
       "product.metafields.custom.brand": brand || "",
       "product.metafields.custom.typeitem": typeitem || "",
-      Type: "",
-      Vendor: "",
-      Published: "",
+      Type: "USA Products",
+      Vendor: "simon",
+      Published: "TRUE",
     }));
     rows.push(...colorRows);
   } else {
@@ -505,7 +500,7 @@ const option1Value = sizeValues.length ? sizeValues.join(", ") : "";
       "Option1 Name": "",
       "Option1 Value": "",
       "Option2 Name": "",
-      "Option2 Value": uniqueColors[0] || "",
+      "Option2 Value": "",
       "Variant Price": "",
       "Cost per item": "",
       "Image Src": img.image,

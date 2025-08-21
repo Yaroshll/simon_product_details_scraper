@@ -3,12 +3,6 @@ import { extractProductData } from "./helpers/extractors.js";
 import { saveToCSV } from "./helpers/excelWriter.js";
 
 const urls = [
-  {
-    url: "https://shop.simon.com/products/fossil-womens-sydney-leather-satchel-6?crpid=7105954578492&cid=adClick:collection",
-    tags: "",
-    brand: "Coach Outlet", 
-    typeitem: "Handbag"  
-  },
 
   {
     url: "https://shop.simon.com/products/puma-x-harry-potter-womens-polo-shirt?crpid=8598900539452",
