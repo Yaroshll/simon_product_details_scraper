@@ -299,7 +299,7 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
 
-  await page.goto(url, { waitUntil: "load", timeout: 7000 });
+  await page.goto(url, { waitUntil: "load", timeout: 70000 });
   await page.waitForLoadState("domcontentloaded");
 
   const handle = formatHandleFromUrl(url);
