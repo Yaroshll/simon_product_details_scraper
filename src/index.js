@@ -6,7 +6,7 @@ const urls = [
 
 
   {
-    url: "https://shop.simon.com/products/davina-vegan-leather-women-s-tote-bag-with-wallet?crpid=6992480469052&cid=adClick%3Acollection&variant=40324780392508",
+    url: "https://shop.simon.com/products/coach-outlet-corner-zip-wristlet-in-signature-canvas-with-stripe-1?crpid=7911827800124&cid=adClick:collection",
     tags: "",
     brand: "Coach Outdlet", 
     typeitem: "Handbag"  
