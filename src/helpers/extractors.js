@@ -24,8 +24,24 @@ function fixTextEncoding(s = "") {
     .replace(/â€¢/g, "•")
     .replace(/â€/g, "'");
 }
+// Inject _SIZE (e.g., 1800x1800) before extension, keep query string
+function normalizeShopifyImage(raw, size = "1800x1800") {
+  if (!raw) return "";
+  const url = new URL(toAbsoluteUrl(raw));
+  const qs = url.search; // keep ?v=...
+  // path like /cdn/shop/files/xxxx.webp
+  const p = url.pathname;
+  const dot = p.lastIndexOf(".");
+  if (dot <= 0) return url.toString(); // nothing to do
+  const base = p.slice(0, dot);
+  const ext = p.slice(dot); // .jpg / .webp
+  // avoid double-size if already there
+  const sized = base.replace(/_(\d+x\d+)$/, "");
+  url.pathname = `${sized}_${size}${ext}`;
+  return url.toString().replace(qs, "") + qs;
+}
 
-/* -------------------- hero readers -------------------- */
+/* -------------------- hero readers (kept for fallback/zoom) -------------------- */
 async function readInlineHeroSrc(page) {
   const sel = [
     ".pdp-main-img",
@@ -62,40 +78,15 @@ async function readInlineHeroSrc(page) {
 async function waitForHeroSrcChange(page, prevSrc) {
   const normalize = (s) => toAbsoluteUrl(s || "");
   const prev = normalize(prevSrc);
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 30; i++) {
     const current = await readInlineHeroSrc(page);
     if (current && normalize(current) !== prev) return current;
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(80);
   }
   return prev;
 }
 
-/* -------------------- thumbnails -------------------- */
-function thumbnailsLocator(page) {
-  return page.locator(
-    [
-      "[data-media-id].product__thumb",
-      ".thumbnail-list__item [data-media-id]",
-      ".thumbnail-list__item",
-      ".product-thumbnails li",
-      ".product__thumbnails .thumbnail",
-      ".product-gallery__thumbnail",
-    ].join(", ")
-  );
-}
-async function clickThumbnailAndWait(page, idx, prevInlineSrc) {
-  const thumbs = thumbnailsLocator(page);
-  const count = await thumbs.count();
-  if (!count) return prevInlineSrc;
-
-  const item = thumbs.nth(idx);
-  await item.click({ timeout: 4000, force: true }).catch(() => {});
-  await page.waitForTimeout(100);
-  await page.waitForLoadState("networkidle").catch(() => {});
-  return await waitForHeroSrcChange(page, prevInlineSrc);
-}
-
-/* -------------------- zoom -> hi-res -------------------- */
+/* -------------------- zoom (still available, but not required for mapping) -------------------- */
 async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   const toAbs = (s) => (s && s.startsWith("//") ? `https:${s}` : s || "");
   const hero = page.locator(".pdp-main-img:visible").first();
@@ -103,14 +94,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   const heroAlt = hasHero
     ? hero
     : page.locator(".product-main-image img:visible, .product__main-photos img:visible").first();
-
-  try {
-    const container = heroAlt.locator(
-      "xpath=ancestor-or-self::*[contains(@class,'pdp-main-img-wrap') or contains(@class,'image-wrap')][1]"
-    );
-    await container.hover({ trial: true }).catch(() => {});
-    await container.hover().catch(() => {});
-  } catch {}
 
   async function findZoomButtonHandle() {
     const handle = await heroAlt.elementHandle();
@@ -140,22 +123,22 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   const btnHandle = await findZoomButtonHandle();
   let opened = false;
   if (btnHandle) {
-    try { await btnHandle.click({ timeout: 3000 }); opened = true; }
-    catch { try { await btnHandle.click({ force: true, timeout: 3000 }); opened = true; } catch {} }
+    try { await btnHandle.click({ timeout: 2500 }); opened = true; }
+    catch { try { await btnHandle.click({ force: true, timeout: 2500 }); opened = true; } catch {} }
   }
   if (!opened) {
-    try { await heroAlt.click({ force: true, timeout: 3000 }); opened = true; } catch {}
+    try { await heroAlt.click({ force: true, timeout: 2500 }); opened = true; } catch {}
   }
 
   try {
-    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 3000 });
+    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 2500 });
   } catch {
     return await readInlineHeroSrc(page);
   }
 
   const prevAbs = toAbs(prevSrc);
   let srcAbs = "";
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 30; i++) {
     const v = await page.evaluate(() => {
       const imgs = Array.from(document.querySelectorAll(".pswp__img"));
       const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
@@ -172,7 +155,7 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
       srcAbs = candidate;
       break;
     }
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(80);
   }
   if (!srcAbs) {
     const fallback = await page.$$eval(".pswp__img", (imgs) => {
@@ -214,8 +197,7 @@ async function getCheckedColor(page) {
     return "";
   });
 }
-
-async function waitForColorSelected(page, color, timeoutMs = 10000) {
+async function waitForColorSelected(page, color, timeoutMs = 8000) {
   const value = cssEscapeValue(color);
   try {
     await page.waitForFunction(
@@ -256,7 +238,77 @@ async function waitForColorSelected(page, color, timeoutMs = 10000) {
   } catch { return false; }
 }
 
-/* -------------------- select color (with variant id wait) -------------------- */
+/* -------------------- variant helpers -------------------- */
+async function getCurrentVariantId(page) {
+  try {
+    const val = await page.$eval('form[action*="/cart/add"] input[name="id"]', (el) => el.value);
+    return val ? String(val) : "";
+  } catch {
+    try {
+      const val2 = await page.$eval(
+        "[data-product-selected-variant-id]",
+        (el) => el.getAttribute("data-product-selected-variant-id")
+      );
+      return val2 ? String(val2) : "";
+    } catch { return ""; }
+  }
+}
+
+async function getVariantFromAllSources(page, variantId) {
+  return await page.evaluate((vid) => {
+    function fromObj(obj) {
+      if (!obj) return null;
+      const variants = obj.variants || (obj.product && obj.product.variants) || [];
+      const v = variants?.find((x) => String(x.id) === String(vid));
+      return v || null;
+    }
+    const w = window;
+    const candidates = [
+      w.productJson, w.ProductJson, w.__INITIAL_STATE__,
+      w.ShopifyAnalytics?.meta?.product, w.meta?.product,
+      w.product, w.theme?.product,
+    ];
+    for (const c of candidates) {
+      const v = fromObj(c);
+      if (v) return v;
+    }
+    // scan embedded JSON
+    const scripts = Array.from(
+      document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"]')
+    );
+    for (const s of scripts) {
+      try {
+        const obj = JSON.parse(s.textContent || "{}");
+        const v = fromObj(obj);
+        if (v) return v;
+      } catch {}
+    }
+    return null;
+  }, variantId);
+}
+
+function variantBestImageUrl(variant) {
+  if (!variant) return "";
+  // 1) featured_media.preview_image.src
+  const fm = variant.featured_media;
+  if (fm && fm.preview_image && fm.preview_image.src) return fm.preview_image.src;
+
+  // 2) featured_image.src (Shopify classic)
+  if (variant.featured_image && variant.featured_image.src) return variant.featured_image.src;
+  if (variant.featured_image && typeof variant.featured_image === "string")
+    return variant.featured_image;
+
+  // 3) sometimes media array is on variant/media, rarely:
+  if (variant.media && Array.isArray(variant.media) && variant.media.length) {
+    const m = variant.media.find((x) => x.preview_image?.src) || variant.media[0];
+    if (m?.preview_image?.src) return m.preview_image.src;
+    if (m?.src) return m.src;
+  }
+
+  return "";
+}
+
+/* -------------------- color selection orchestrator -------------------- */
 async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   const beforeVariantId = await getCurrentVariantId(page).catch(() => "");
 
@@ -274,10 +326,10 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
     });
   }
 
-  await page.waitForTimeout(100);
-  await waitForColorSelected(page, color, 10000);
+  await page.waitForTimeout(80);
+  await waitForColorSelected(page, color, 8000);
 
-  // wait for variant id change
+  // wait for variant id to change
   try {
     await page.waitForFunction(
       (oldId) => {
@@ -285,7 +337,7 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
         return el && String(el.value) !== String(oldId);
       },
       beforeVariantId,
-      { timeout: 2500 }
+      { timeout: 2000 }
     );
   } catch {}
 
@@ -293,22 +345,6 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   const newInlineSrc = await waitForHeroSrcChange(page, prevInlineSrc);
   const checkedColor = await getCheckedColor(page);
   return { checkedColor: checkedColor || color, newInlineSrc };
-}
-
-/* -------------------- variant/media helpers -------------------- */
-async function getCurrentVariantId(page) {
-  try {
-    const val = await page.$eval('form[action*="/cart/add"] input[name="id"]', (el) => el.value);
-    return val ? String(val) : "";
-  } catch {
-    try {
-      const val2 = await page.$eval(
-        "[data-product-selected-variant-id]",
-        (el) => el.getAttribute("data-product-selected-variant-id")
-      );
-      return val2 ? String(val2) : "";
-    } catch { return ""; }
-  }
 }
 
 /* -------------------- main -------------------- */
@@ -337,119 +373,91 @@ export async function extractProductData(page, urlObj) {
   );
   const hasSizes = sizeValues.length > 0;
 
-  /* colors - improved selector to find all color options */
-  const colorOptions = await page.$$eval(
-    'fieldset[name="Color"] .variant-input, ' +
-    'fieldset[data-option="option2"] .variant-input, ' +
-    '[data-option-index="1"] .variant-input, ' +
-    '.product-form__input--color .variant-input, ' +
-    '.product-form__input--dropdown .variant-input',
-    (nodes) => {
-      return nodes.map(node => {
-        const value = node.getAttribute('data-value');
-        const label = node.querySelector('label');
-        const input = node.querySelector('input[type="radio"]');
-        const isChecked = input ? input.checked : false;
-        
-        return {
-          value,
-          isChecked,
-          labelText: label ? label.textContent.trim() : '',
-          labelFor: label ? label.getAttribute('for') : ''
-        };
-      }).filter(opt => opt.value);
-    }
-  );
-
+  /* colors */
+  const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
-  for (const option of colorOptions) {
-    if (option.labelFor) {
-      variantDetails.push({
-        value: option.value,
-        isChecked: option.isChecked,
-        labelLocator: page.locator(`label[for="${option.labelFor}"]`)
-      });
-    } else {
-      variantDetails.push({
-        value: option.value,
-        isChecked: option.isChecked,
-        labelLocator: page.locator(`.variant-input[data-value="${cssEscapeValue(option.value)}"] label`)
-      });
+  if (colorFieldset) {
+    const variantInputs = await colorFieldset.$$(".variant-input");
+    for (const inputDiv of variantInputs) {
+      const value = await inputDiv.getAttribute("data-value");
+      const labelElement = await inputDiv.$("label.variant__button-label");
+      if (value && labelElement) {
+        const labelFor = await labelElement.getAttribute("for");
+        variantDetails.push({
+          value,
+          labelLocator: labelFor
+            ? page.locator(`label.variant__button-label[for="${labelFor}"]`)
+            : page.locator(
+                `.variant-input[data-value="${cssEscapeValue(value)}"] .variant__button-label`
+              ),
+        });
+      }
     }
   }
-
   const images = [];
 
-  /* capture function that ensures the hero shows this color's media */
-  async function captureForColor(color, prevInlineSrc) {
-    const ensuredSrc = await waitForHeroSrcChange(page, prevInlineSrc);
-    const hasZoom = await page
-      .locator("button.js-photoswipe__zoom, button.product__photo-zoom")
-      .count();
-    const hiRes = hasZoom ? await openZoomAndGetHiResSrc(page, ensuredSrc) : "";
-    const srcFinal = hiRes || (await readInlineHeroSrc(page)) || ensuredSrc || "";
-    
-    if (srcFinal) {
-      images.push({ handle, image: srcFinal, color });
-      return true;
+  /* === KEY FIX: capture image directly from the selected variant object === */
+  async function captureForColor(color) {
+    const variantId = await getCurrentVariantId(page);
+    const variant = await getVariantFromAllSources(page, variantId);
+    let src = variantBestImageUrl(variant);
+
+    // normalize to 1800x1800 (keeps ?v=)
+    src = normalizeShopifyImage(src, "1800x1800");
+    src = toAbsoluteUrl(src);
+
+    // If variant did not expose an image (rare), fallback to current hero/zoom
+    if (!src) {
+      const hero = await readInlineHeroSrc(page);
+      const hasZoom = await page
+        .locator("button.js-photoswipe__zoom, button.product__photo-zoom")
+        .count();
+      const zoom = hasZoom ? await openZoomAndGetHiResSrc(page, hero) : "";
+      src = normalizeShopifyImage(zoom || hero || "", "1800x1800");
     }
-    return false;
+
+    images.push({ handle, image: src, color });
   }
 
   /* === image capture scenarios === */
   if (variantDetails.length === 0) {
-    // no colors: capture hero + thumbs
-    let currentInline = await readInlineHeroSrc(page);
-    const thumbs = thumbnailsLocator(page);
-    const tCount = await thumbs.count();
-    if (!tCount) {
-      await captureForColor("", currentInline);
-    } else {
-      for (let i = 0; i < tCount; i++) {
-        currentInline = await clickThumbnailAndWait(page, i, currentInline);
-        await captureForColor("", currentInline);
-      }
-    }
+    // no colors: just capture hero once
+    const hero = await readInlineHeroSrc(page);
+    const hasZoom = await page
+      .locator("button.js-photoswipe__zoom, button.product__photo-zoom")
+      .count();
+    const zoom = hasZoom ? await openZoomAndGetHiResSrc(page, hero) : "";
+    const src = normalizeShopifyImage(zoom || hero || "", "1800x1800");
+    images.push({ handle, image: src, color: "" });
   } else if (variantDetails.length === 1) {
-    // single color: save all images mapped to that color
-    const color = variantDetails[0].value || "";
-    let currentInline = await readInlineHeroSrc(page);
-    const thumbs = thumbnailsLocator(page);
-    const tCount = await thumbs.count();
-    if (!tCount) {
-      await captureForColor(color, currentInline);
-    } else {
-      for (let i = 0; i < tCount; i++) {
-        currentInline = await clickThumbnailAndWait(page, i, currentInline);
-        await captureForColor(color, currentInline);
-      }
-    }
+    // one color: ensure the currently selected variant dictates the image
+    const color = variantDetails[0].value || (await getCheckedColor(page)) || "";
+    await captureForColor(color);
   } else {
-    // multiple colors: process each color exactly once
-    const seenColors = new Set();
-    
-    // Process the initially selected color first
-    const initialChecked = variantDetails.find(v => v.isChecked);
-    if (initialChecked) {
-      const prevInline = await readInlineHeroSrc(page);
-      const { checkedColor, newInlineSrc } = await selectColorAndWait(
-        page, initialChecked.labelLocator, initialChecked.value, prevInline
+    // multiple colors: selected first, then each remaining (no repeats)
+    const seen = new Set();
+
+    const initialCheckedColor = await getCheckedColor(page);
+    const initEntry =
+      (initialCheckedColor &&
+        variantDetails.find((v) => v.value === initialCheckedColor)) ||
+      variantDetails[0];
+
+    if (initEntry?.labelLocator) {
+      const { checkedColor } = await selectColorAndWait(
+        page, initEntry.labelLocator, initEntry.value, ""
       );
-      await captureForColor(checkedColor || initialChecked.value, newInlineSrc);
-      seenColors.add((checkedColor || initialChecked.value).toLowerCase());
+      await captureForColor(checkedColor || initEntry.value);
+      seen.add((checkedColor || initEntry.value).toLowerCase());
     }
-    
-    // Process all other colors
+
     for (const v of variantDetails) {
-      const colorKey = v.value.toLowerCase();
-      if (seenColors.has(colorKey)) continue;
-      
-      const prevInline = await readInlineHeroSrc(page);
-      const { checkedColor, newInlineSrc } = await selectColorAndWait(
-        page, v.labelLocator, v.value, prevInline
-      );
-      await captureForColor(checkedColor || v.value, newInlineSrc);
-      seenColors.add((checkedColor || v.value).toLowerCase());
+      const key = (v.value || "").toLowerCase();
+      if (!key || seen.has(key)) continue;
+
+      const { checkedColor } = await selectColorAndWait(page, v.labelLocator, v.value, "");
+      await captureForColor(checkedColor || v.value);
+      seen.add((checkedColor || v.value).toLowerCase());
     }
   }
 
@@ -457,7 +465,7 @@ export async function extractProductData(page, urlObj) {
   const allColorValues = variantDetails.map((v) => v.value);
   const hasColors = allColorValues.length > 0;
 
-  // pick first image per color for row image
+  // first image per color
   const colorImageMap = new Map();
   for (const img of images) {
     if (!colorImageMap.has(img.color)) colorImageMap.set(img.color, img.image);
@@ -511,33 +519,6 @@ export async function extractProductData(page, urlObj) {
     }
   } else {
     rows.push(makeRow({ size: "", color: "", isMain: true }));
-  }
-
-  // Add extra images as separate rows
-  if (images.length > 1) {
-    const extraImages = images.slice(1).map((img) => ({
-      Handle: handle,
-      Title: "",
-      "Body (HTML)": "",
-      Tags: "",
-      "Option1 Name": "",
-      "Option1 Value": "",
-      "Option2 Name": "",
-      "Option2 Value": "",
-      "Variant Price": "",
-      "Cost per item": "",
-      "Image Src": img.image,
-      "product.metafields.custom.original_prodect_url": "",
-      "Variant Fulfillment Service": "",
-      "Variant Inventory Policy": "",
-      "Variant Inventory Tracker": "",
-      "product.metafields.custom.brand": "",
-      "custom.item_type": "",
-      Type: "",
-      Vendor: "",
-      Published: "",
-    }));
-    rows.push(...extraImages);
   }
 
   return rows;
