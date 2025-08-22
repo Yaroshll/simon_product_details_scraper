@@ -457,7 +457,11 @@ export async function extractProductData(page, urlObj) {
   const colorImageMap = new Map();
   for (const { color, image } of images) {
     if (!colorImageMap.has(color)) colorImageMap.set(color, image);
+
   }
+  console.log('fg',colorImageMap.get(color));
+   console.log('fg',colorImageMap.get(image));
+
 
   const allColorValues = variantDetails.map((v) => v.value);
   const hasColors = allColorValues.length > 0;
@@ -474,7 +478,7 @@ export async function extractProductData(page, urlObj) {
       "Option2 Value": hasColors ? (color || "") : "",
       "Variant Price": variantPrice.toFixed(2),
       "Cost per item": cost.toFixed(2),
-      "Image Src": hasColors ? (colorImageMap.get(color) || "") : ( (images[1]?.image) || "" ),
+      "Image Src": hasColors ? (colorImageMap.get(color) || "") : ( (images[0]?.image) || "" ),
       "product.metafields.custom.original_prodect_url": isMain ? url : "",
       "Variant Fulfillment Service": "manual",
       "Variant Inventory Policy": "deny",
