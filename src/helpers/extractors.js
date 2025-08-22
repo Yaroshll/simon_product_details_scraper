@@ -4,14 +4,17 @@ import {
   calculatePrices,
 } from "./formatter.js";
 
-/* -------------------- generic helpers -------------------- */
+/* -------------------- helpers -------------------- */
+
 function toAbsoluteUrl(src) {
   if (!src) return "";
   return src.startsWith("//") ? `https:${src}` : src;
 }
+
 function cssEscapeValue(s = "") {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
+
 function fixTextEncoding(s = "") {
   return s
     .replace(/â€™/g, "’")
@@ -24,154 +27,107 @@ function fixTextEncoding(s = "") {
     .replace(/â€¢/g, "•")
     .replace(/â€/g, "'");
 }
-// Inject _SIZE (e.g., 1800x1800) before extension, keep query string
-function normalizeShopifyImage(raw, size = "1800x1800") {
-  if (!raw) return "";
-  const url = new URL(toAbsoluteUrl(raw));
-  const qs = url.search; // keep ?v=...
-  // path like /cdn/shop/files/xxxx.webp
-  const p = url.pathname;
-  const dot = p.lastIndexOf(".");
-  if (dot <= 0) return url.toString(); // nothing to do
-  const base = p.slice(0, dot);
-  const ext = p.slice(dot); // .jpg / .webp
-  // avoid double-size if already there
-  const sized = base.replace(/_(\d+x\d+)$/, "");
-  url.pathname = `${sized}_${size}${ext}`;
-  return url.toString().replace(qs, "") + qs;
+
+/** Return the largest URL from a srcset string */
+function pickLargestFromSrcset(srcset) {
+  if (!srcset) return "";
+  const parts = srcset
+    .split(",")
+    .map((p) => p.trim())
+    .map((p) => {
+      const [url, size] = p.split(" ");
+      const n = parseInt(size || "0", 10);
+      return { url, n: isNaN(n) ? 0 : n };
+    })
+    .sort((a, b) => b.n - a.n);
+  return parts[0]?.url || "";
 }
 
-/* -------------------- hero readers (kept for fallback/zoom) -------------------- */
-async function readInlineHeroSrc(page) {
-  const sel = [
-    ".pdp-main-img",
-    ".product-main-image img",
-    ".product__main-photos img",
-    ".product__media-item.is-active img",
-    ".slider__slide.is-active img",
+/* -------------------- hero readers -------------------- */
+
+/**
+ * Try to read the visible hero img; prefer data-photoswipe-src (hi-res 1800x1800),
+ * else the largest srcset/currentSrc/src.
+ */
+async function readHiResHero(page) {
+  // common hero selectors (first match wins)
+  const selectors = [
+    // the one you asked for specifically:
+    'img.photoswipe__image.pdp-main-img',
+    // other common hero patterns:
+    '.pdp-main-img',
+    '.product-main-image img',
+    '.product__main-photos img',
+    '.product__media-item.is-active img',
+    '.slider__slide.is-active img',
   ];
-  for (const s of sel) {
+
+  for (const s of selectors) {
     const exists = await page.$(s);
     if (!exists) continue;
+
     try {
-      const src = await page.$eval(s, (img) => {
-        const srcset = img.getAttribute("srcset");
-        if (srcset) {
-          const parts = srcset
-            .split(",")
-            .map((p) => p.trim().split(" ")[0])
-            .filter(Boolean);
-          if (parts.length) return parts[parts.length - 1];
-        }
-        return (
-          img.currentSrc ||
-          img.getAttribute("data-photoswipe-src") ||
-          img.getAttribute("src") ||
-          ""
-        );
+      const data = await page.$eval(s, (img) => {
+        const rawData = img.getAttribute("data-photoswipe-src") || "";
+        const srcset = img.getAttribute("srcset") || img.getAttribute("data-srcset") || "";
+        const current = img.currentSrc || img.getAttribute("src") || "";
+        return { rawData, srcset, current };
       });
-      if (src) return toAbsoluteUrl(src);
+
+      // Prefer data-photoswipe-src (hi-res 1800x1800)
+      if (data.rawData) return toAbsoluteUrl(data.rawData);
+
+      // Else pick largest from srcset, else currentSrc/src
+      const fromSet = pickLargestFromSrcset(data.srcset);
+      if (fromSet) return toAbsoluteUrl(fromSet);
+      if (data.current) return toAbsoluteUrl(data.current);
     } catch {}
   }
+
   return "";
 }
-async function waitForHeroSrcChange(page, prevSrc) {
+
+/** Wait until the hero image URL actually changes */
+async function waitForHeroSrcChange(page, prevSrc, tries = 30, delay = 80) {
   const normalize = (s) => toAbsoluteUrl(s || "");
   const prev = normalize(prevSrc);
-  for (let i = 0; i < 30; i++) {
-    const current = await readInlineHeroSrc(page);
+  for (let i = 0; i < tries; i++) {
+    const current = await readHiResHero(page);
     if (current && normalize(current) !== prev) return current;
-    await page.waitForTimeout(80);
+    await page.waitForTimeout(delay);
   }
   return prev;
 }
 
-/* -------------------- zoom (still available, but not required for mapping) -------------------- */
-async function openZoomAndGetHiResSrc(page, prevSrc = "") {
-  const toAbs = (s) => (s && s.startsWith("//") ? `https:${s}` : s || "");
-  const hero = page.locator(".pdp-main-img:visible").first();
-  const hasHero = await hero.count().then((c) => c > 0);
-  const heroAlt = hasHero
-    ? hero
-    : page.locator(".product-main-image img:visible, .product__main-photos img:visible").first();
+/* -------------------- thumbnails -------------------- */
 
-  async function findZoomButtonHandle() {
-    const handle = await heroAlt.elementHandle();
-    if (handle) {
-      const btnInContainer = await handle.evaluateHandle((img) => {
-        const cont =
-          img.closest(".pdp-main-img-wrap") ||
-          img.closest(".image-wrap") ||
-          img.parentElement;
-        if (!cont) return null;
-        return (
-          cont.querySelector("button.js-photoswipe__zoom") ||
-          cont.querySelector("button.product__photo-zoom")
-        );
-      });
-      if (btnInContainer && (await btnInContainer.asElement())) {
-        return btnInContainer.asElement();
-      }
-    }
-    const visibleBtn = page.locator("button.js-photoswipe__zoom:visible").first();
-    if (await visibleBtn.count()) return visibleBtn.elementHandle();
-    const anyBtn = page.locator("button.js-photoswipe__zoom").first();
-    if (await anyBtn.count()) return anyBtn.elementHandle();
-    return null;
-  }
-
-  const btnHandle = await findZoomButtonHandle();
-  let opened = false;
-  if (btnHandle) {
-    try { await btnHandle.click({ timeout: 2500 }); opened = true; }
-    catch { try { await btnHandle.click({ force: true, timeout: 2500 }); opened = true; } catch {} }
-  }
-  if (!opened) {
-    try { await heroAlt.click({ force: true, timeout: 2500 }); opened = true; } catch {}
-  }
-
-  try {
-    await page.waitForSelector(".pswp__img", { state: "visible", timeout: 2500 });
-  } catch {
-    return await readInlineHeroSrc(page);
-  }
-
-  const prevAbs = toAbs(prevSrc);
-  let srcAbs = "";
-  for (let i = 0; i < 30; i++) {
-    const v = await page.evaluate(() => {
-      const imgs = Array.from(document.querySelectorAll(".pswp__img"));
-      const visible = imgs.find((img) => getComputedStyle(img).display !== "none");
-      if (!visible) return { src: "", n: 0, placeholder: true };
-      return {
-        src: visible.getAttribute("src") || "",
-        n: visible.naturalWidth || 0,
-        placeholder: visible.classList.contains("pswp__img--placeholder"),
-      };
-    });
-    const candidate = toAbs(v.src);
-    const changed = prevAbs ? candidate !== prevAbs : Boolean(candidate);
-    if (candidate && !v.placeholder && v.n >= 1000 && changed) {
-      srcAbs = candidate;
-      break;
-    }
-    await page.waitForTimeout(80);
-  }
-  if (!srcAbs) {
-    const fallback = await page.$$eval(".pswp__img", (imgs) => {
-      const v = imgs.find(
-        (img) => getComputedStyle(img).display !== "none" && img.getAttribute("src")
-      );
-      return v ? v.getAttribute("src") : "";
-    });
-    srcAbs = toAbs(fallback);
-  }
-
-  try { await page.keyboard.press("Escape"); } catch {}
-  return srcAbs;
+function thumbnailsLocator(page) {
+  return page.locator(
+    [
+      "[data-media-id].product__thumb",
+      ".thumbnail-list__item [data-media-id]",
+      ".thumbnail-list__item",
+      ".product-thumbnails li",
+      ".product__thumbnails .thumbnail",
+      ".product-gallery__thumbnail",
+    ].join(", ")
+  );
 }
 
-/* -------------------- color selection state -------------------- */
+async function clickThumbnailAndWait(page, idx, prevInlineSrc) {
+  const thumbs = thumbnailsLocator(page);
+  const count = await thumbs.count();
+  if (!count) return prevInlineSrc;
+
+  const item = thumbs.nth(idx);
+  await item.click({ timeout: 4000, force: true }).catch(() => {});
+  await page.waitForTimeout(100);
+  await page.waitForLoadState("networkidle").catch(() => {});
+  return await waitForHeroSrcChange(page, prevInlineSrc);
+}
+
+/* -------------------- color selection helpers -------------------- */
+
 async function getCheckedColor(page) {
   return await page.evaluate(() => {
     const candidates = [
@@ -197,6 +153,7 @@ async function getCheckedColor(page) {
     return "";
   });
 }
+
 async function waitForColorSelected(page, color, timeoutMs = 8000) {
   const value = cssEscapeValue(color);
   try {
@@ -235,83 +192,17 @@ async function waitForColorSelected(page, color, timeoutMs = 8000) {
       { timeout: timeoutMs }
     );
     return true;
-  } catch { return false; }
-}
-
-/* -------------------- variant helpers -------------------- */
-async function getCurrentVariantId(page) {
-  try {
-    const val = await page.$eval('form[action*="/cart/add"] input[name="id"]', (el) => el.value);
-    return val ? String(val) : "";
   } catch {
-    try {
-      const val2 = await page.$eval(
-        "[data-product-selected-variant-id]",
-        (el) => el.getAttribute("data-product-selected-variant-id")
-      );
-      return val2 ? String(val2) : "";
-    } catch { return ""; }
+    return false;
   }
 }
 
-async function getVariantFromAllSources(page, variantId) {
-  return await page.evaluate((vid) => {
-    function fromObj(obj) {
-      if (!obj) return null;
-      const variants = obj.variants || (obj.product && obj.product.variants) || [];
-      const v = variants?.find((x) => String(x.id) === String(vid));
-      return v || null;
-    }
-    const w = window;
-    const candidates = [
-      w.productJson, w.ProductJson, w.__INITIAL_STATE__,
-      w.ShopifyAnalytics?.meta?.product, w.meta?.product,
-      w.product, w.theme?.product,
-    ];
-    for (const c of candidates) {
-      const v = fromObj(c);
-      if (v) return v;
-    }
-    // scan embedded JSON
-    const scripts = Array.from(
-      document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"]')
-    );
-    for (const s of scripts) {
-      try {
-        const obj = JSON.parse(s.textContent || "{}");
-        const v = fromObj(obj);
-        if (v) return v;
-      } catch {}
-    }
-    return null;
-  }, variantId);
-}
-
-function variantBestImageUrl(variant) {
-  if (!variant) return "";
-  // 1) featured_media.preview_image.src
-  const fm = variant.featured_media;
-  if (fm && fm.preview_image && fm.preview_image.src) return fm.preview_image.src;
-
-  // 2) featured_image.src (Shopify classic)
-  if (variant.featured_image && variant.featured_image.src) return variant.featured_image.src;
-  if (variant.featured_image && typeof variant.featured_image === "string")
-    return variant.featured_image;
-
-  // 3) sometimes media array is on variant/media, rarely:
-  if (variant.media && Array.isArray(variant.media) && variant.media.length) {
-    const m = variant.media.find((x) => x.preview_image?.src) || variant.media[0];
-    if (m?.preview_image?.src) return m.preview_image.src;
-    if (m?.src) return m.src;
-  }
-
-  return "";
-}
-
-/* -------------------- color selection orchestrator -------------------- */
-async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
-  const beforeVariantId = await getCurrentVariantId(page).catch(() => "");
-
+/**
+ * Click a color label/input and wait until selection + hero swap.
+ * Returns { checkedColor, newHero } where newHero is the hi-res URL (pref from data-photoswipe-src).
+ */
+async function selectColorAndReadHero(page, labelLocator, color, prevHero) {
+  // Click label or matching input
   if (labelLocator) {
     await labelLocator.click({ timeout: 20000 }).catch(async () => {
       const vEsc = cssEscapeValue(color);
@@ -321,33 +212,22 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
           `input[name="option-0"][value="${vEsc}"], ` +
           `input[type="radio"][value="${vEsc}"]`
       );
-      if (await input.count())
-        await input.first().click({ force: true, timeout: 20000 });
+      if (await input.count()) await input.first().click({ force: true, timeout: 20000 });
     });
   }
 
   await page.waitForTimeout(80);
   await waitForColorSelected(page, color, 8000);
 
-  // wait for variant id to change
-  try {
-    await page.waitForFunction(
-      (oldId) => {
-        const el = document.querySelector('form[action*="/cart/add"] input[name="id"]');
-        return el && String(el.value) !== String(oldId);
-      },
-      beforeVariantId,
-      { timeout: 2000 }
-    );
-  } catch {}
-
   await page.waitForLoadState("networkidle").catch(() => {});
-  const newInlineSrc = await waitForHeroSrcChange(page, prevInlineSrc);
+  const newHero = await waitForHeroSrcChange(page, prevHero);
+
   const checkedColor = await getCheckedColor(page);
-  return { checkedColor: checkedColor || color, newInlineSrc };
+  return { checkedColor: checkedColor || color, newHero };
 }
 
 /* -------------------- main -------------------- */
+
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
 
@@ -356,8 +236,8 @@ export async function extractProductData(page, urlObj) {
 
   const handle = formatHandleFromUrl(url);
 
-  let rawTitle = (await page.textContent("h1.product-single__title"))?.trim() || "";
-  let rawDesc = (await page.textContent(".pdp-details-txt"))?.trim() || "";
+  const rawTitle = (await page.textContent("h1.product-single__title"))?.trim() || "";
+  const rawDesc = (await page.textContent(".pdp-details-txt"))?.trim() || "";
   const title = fixTextEncoding(rawTitle);
   const description = fixTextEncoding(rawDesc);
 
@@ -365,7 +245,7 @@ export async function extractProductData(page, urlObj) {
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
 
-  /* sizes (option1) -> list all, each becomes its own row later */
+  /* ---- sizes (option1) -> list all; each size gets its own row ---- */
   const sizeValues = await page.$$eval(
     'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value], ' +
       'fieldset[data-index="option1"] .variant-input[data-index="option1"][data-value]',
@@ -373,7 +253,7 @@ export async function extractProductData(page, urlObj) {
   );
   const hasSizes = sizeValues.length > 0;
 
-  /* colors */
+  /* ---- colors (fieldset[name="Color"]) ---- */
   const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
   if (colorFieldset) {
@@ -394,74 +274,81 @@ export async function extractProductData(page, urlObj) {
       }
     }
   }
-  const images = [];
 
-  /* === KEY FIX: capture image directly from the selected variant object === */
-  async function captureForColor(color) {
-    const variantId = await getCurrentVariantId(page);
-    const variant = await getVariantFromAllSources(page, variantId);
-    let src = variantBestImageUrl(variant);
+  const images = []; // { handle, image, color }
 
-    // normalize to 1800x1800 (keeps ?v=)
-    src = normalizeShopifyImage(src, "1800x1800");
-    src = toAbsoluteUrl(src);
-
-    // If variant did not expose an image (rare), fallback to current hero/zoom
-    if (!src) {
-      const hero = await readInlineHeroSrc(page);
-      const hasZoom = await page
-        .locator("button.js-photoswipe__zoom, button.product__photo-zoom")
-        .count();
-      const zoom = hasZoom ? await openZoomAndGetHiResSrc(page, hero) : "";
-      src = normalizeShopifyImage(zoom || hero || "", "1800x1800");
-    }
-
-    images.push({ handle, image: src, color });
+  /** Capture one hi-res image for the current hero (mapped to a color value). */
+  async function captureHiResForColor(color, prevHero = "") {
+    const ensured = await waitForHeroSrcChange(page, prevHero);
+    const hi = await readHiResHero(page); // prefers data-photoswipe-src
+    const final = hi || ensured || (await readHiResHero(page)) || "";
+    images.push({ handle, image: final, color });
   }
 
-  /* === image capture scenarios === */
+  /* === image capture === */
+
+  // 0) read initial hero
+  let currentHero = await readHiResHero(page);
+
   if (variantDetails.length === 0) {
-    // no colors: just capture hero once
-    const hero = await readInlineHeroSrc(page);
-    const hasZoom = await page
-      .locator("button.js-photoswipe__zoom, button.product__photo-zoom")
-      .count();
-    const zoom = hasZoom ? await openZoomAndGetHiResSrc(page, hero) : "";
-    const src = normalizeShopifyImage(zoom || hero || "", "1800x1800");
-    images.push({ handle, image: src, color: "" });
+    // No colors → capture hero (and all thumbs if present) with empty color
+    const thumbs = thumbnailsLocator(page);
+    const tCount = await thumbs.count();
+    if (!tCount) {
+      await captureHiResForColor("", currentHero);
+    } else {
+      for (let i = 0; i < tCount; i++) {
+        currentHero = await clickThumbnailAndWait(page, i, currentHero);
+        await captureHiResForColor("", currentHero);
+      }
+    }
   } else if (variantDetails.length === 1) {
-    // one color: ensure the currently selected variant dictates the image
+    // Single color → save all images for that color
     const color = variantDetails[0].value || (await getCheckedColor(page)) || "";
-    await captureForColor(color);
+    const thumbs = thumbnailsLocator(page);
+    const tCount = await thumbs.count();
+    if (!tCount) {
+      await captureHiResForColor(color, currentHero);
+    } else {
+      for (let i = 0; i < tCount; i++) {
+        currentHero = await clickThumbnailAndWait(page, i, currentHero);
+        await captureHiResForColor(color, currentHero);
+      }
+    }
   } else {
-    // multiple colors: selected first, then each remaining (no repeats)
+    // Multiple colors → selected first, then others; ALWAYS click color → wait → read data-photoswipe-src
     const seen = new Set();
 
+    // First: currently selected (if detectable), else first entry
     const initialCheckedColor = await getCheckedColor(page);
-    const initEntry =
+    const firstEntry =
       (initialCheckedColor &&
         variantDetails.find((v) => v.value === initialCheckedColor)) ||
       variantDetails[0];
 
-    if (initEntry?.labelLocator) {
-      const { checkedColor } = await selectColorAndWait(
-        page, initEntry.labelLocator, initEntry.value, ""
-      );
-      await captureForColor(checkedColor || initEntry.value);
-      seen.add((checkedColor || initEntry.value).toLowerCase());
+    if (firstEntry?.labelLocator) {
+      const res = await selectColorAndReadHero(page, firstEntry.labelLocator, firstEntry.value, currentHero);
+      currentHero = res.newHero;
+      const cVal = (res.checkedColor || firstEntry.value);
+      await captureHiResForColor(cVal, currentHero);
+      seen.add(cVal.toLowerCase());
     }
 
+    // Then: remaining colors (no repeats)
     for (const v of variantDetails) {
       const key = (v.value || "").toLowerCase();
       if (!key || seen.has(key)) continue;
 
-      const { checkedColor } = await selectColorAndWait(page, v.labelLocator, v.value, "");
-      await captureForColor(checkedColor || v.value);
-      seen.add((checkedColor || v.value).toLowerCase());
+      const res = await selectColorAndReadHero(page, v.labelLocator, v.value, currentHero);
+      currentHero = res.newHero;
+      const cVal = res.checkedColor || v.value;
+      await captureHiResForColor(cVal, currentHero);
+      seen.add(cVal.toLowerCase());
     }
   }
 
-  /* build variant matrix rows (Size × Color) */
+  /* === build rows (Size × Color) === */
+
   const allColorValues = variantDetails.map((v) => v.value);
   const hasColors = allColorValues.length > 0;
 
