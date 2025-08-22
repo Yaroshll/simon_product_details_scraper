@@ -4,17 +4,14 @@ import {
   calculatePrices,
 } from "./formatter.js";
 
-/* -------------------- helpers -------------------- */
-
+/* -------------------- generic helpers -------------------- */
 function toAbsoluteUrl(src) {
   if (!src) return "";
   return src.startsWith("//") ? `https:${src}` : src;
 }
-
 function cssEscapeValue(s = "") {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
-
 function fixTextEncoding(s = "") {
   return s
     .replace(/â€™/g, "’")
@@ -24,13 +21,19 @@ function fixTextEncoding(s = "") {
     .replace(/â€”/g, "—")
     .replace(/â€‹/g, "")
     .replace(/â€³|â€/g, "”")
-    .replace(/â€š/g, "‚")
     .replace(/â€¢/g, "•")
     .replace(/â€/g, "'");
 }
 
+/* -------------------- hero readers -------------------- */
 async function readInlineHeroSrc(page) {
-  const sel = [".pdp-main-img", ".product-main-image img", ".product__main-photos img"];
+  const sel = [
+    ".pdp-main-img",
+    ".product-main-image img",
+    ".product__main-photos img",
+    ".product__media-item.is-active img",
+    ".slider__slide.is-active img",
+  ];
   for (const s of sel) {
     const exists = await page.$(s);
     if (!exists) continue;
@@ -56,13 +59,23 @@ async function readInlineHeroSrc(page) {
   }
   return "";
 }
+async function waitForHeroSrcChange(page, prevSrc) {
+  const normalize = (s) => toAbsoluteUrl(s || "");
+  const prev = normalize(prevSrc);
+  for (let i = 0; i < 40; i++) {
+    const current = await readInlineHeroSrc(page);
+    if (current && normalize(current) !== prev) return current;
+    await page.waitForTimeout(100);
+  }
+  return prev;
+}
 
 /* -------------------- thumbnails -------------------- */
-
 function thumbnailsLocator(page) {
   return page.locator(
     [
-      ".product__thumb",
+      "[data-media-id].product__thumb",
+      ".thumbnail-list__item [data-media-id]",
       ".thumbnail-list__item",
       ".product-thumbnails li",
       ".product__thumbnails .thumbnail",
@@ -70,33 +83,21 @@ function thumbnailsLocator(page) {
     ].join(", ")
   );
 }
-
 async function clickThumbnailAndWait(page, idx, prevInlineSrc) {
   const thumbs = thumbnailsLocator(page);
   const count = await thumbs.count();
   if (!count) return prevInlineSrc;
 
   const item = thumbs.nth(idx);
-  const img = item.locator("img").first();
-  if (await img.count()) {
-    await img.click({ timeout: 4000 }).catch(async () => {
-      await item.click({ timeout: 4000, force: true });
-    });
-  } else {
-    await item.click({ timeout: 4000, force: true });
-  }
-
+  await item.click({ timeout: 4000, force: true }).catch(() => {});
   await page.waitForTimeout(100);
   await page.waitForLoadState("networkidle").catch(() => {});
-  const newSrc = await waitForHeroSrcChange(page, prevInlineSrc);
-  return newSrc;
+  return await waitForHeroSrcChange(page, prevInlineSrc);
 }
 
 /* -------------------- zoom -> hi-res -------------------- */
-
 async function openZoomAndGetHiResSrc(page, prevSrc = "") {
   const toAbs = (s) => (s && s.startsWith("//") ? `https:${s}` : s || "");
-
   const hero = page.locator(".pdp-main-img:visible").first();
   const hasHero = await hero.count().then((c) => c > 0);
   const heroAlt = hasHero
@@ -131,32 +132,19 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     }
     const visibleBtn = page.locator("button.js-photoswipe__zoom:visible").first();
     if (await visibleBtn.count()) return visibleBtn.elementHandle();
-
     const anyBtn = page.locator("button.js-photoswipe__zoom").first();
     if (await anyBtn.count()) return anyBtn.elementHandle();
-
     return null;
   }
 
   const btnHandle = await findZoomButtonHandle();
-
   let opened = false;
   if (btnHandle) {
-    try {
-      await btnHandle.click({ timeout: 3000 });
-      opened = true;
-    } catch {
-      try {
-        await btnHandle.click({ force: true, timeout: 3000 });
-        opened = true;
-      } catch {}
-    }
+    try { await btnHandle.click({ timeout: 3000 }); opened = true; }
+    catch { try { await btnHandle.click({ force: true, timeout: 3000 }); opened = true; } catch {} }
   }
   if (!opened) {
-    try {
-      await heroAlt.click({ force: true, timeout: 3000 });
-      opened = true;
-    } catch {}
+    try { await heroAlt.click({ force: true, timeout: 3000 }); opened = true; } catch {}
   }
 
   try {
@@ -186,7 +174,6 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     }
     await page.waitForTimeout(100);
   }
-
   if (!srcAbs) {
     const fallback = await page.$$eval(".pswp__img", (imgs) => {
       const v = imgs.find(
@@ -197,28 +184,11 @@ async function openZoomAndGetHiResSrc(page, prevSrc = "") {
     srcAbs = toAbs(fallback);
   }
 
-  try {
-    await page.keyboard.press("Escape");
-  } catch {}
+  try { await page.keyboard.press("Escape"); } catch {}
   return srcAbs;
 }
 
-/* -------------------- image swap wait -------------------- */
-
-async function waitForHeroSrcChange(page, prevSrc) {
-  const normalize = (s) => toAbsoluteUrl(s || "");
-  const prev = normalize(prevSrc);
-
-  for (let i = 0; i < 40; i++) {
-    const current = await readInlineHeroSrc(page);
-    if (current && normalize(current) !== prev) return current;
-    await page.waitForTimeout(100);
-  }
-  return prev;
-}
-
-/* -------------------- robust selection helpers -------------------- */
-
+/* -------------------- color selection state -------------------- */
 async function getCheckedColor(page) {
   return await page.evaluate(() => {
     const candidates = [
@@ -244,8 +214,7 @@ async function getCheckedColor(page) {
     return "";
   });
 }
-
-async function waitForColorSelected(page, color, timeoutMs = 12000) {
+async function waitForColorSelected(page, color, timeoutMs = 10000) {
   const value = cssEscapeValue(color);
   try {
     await page.waitForFunction(
@@ -274,9 +243,7 @@ async function waitForColorSelected(page, color, timeoutMs = 12000) {
               l.getAttribute("aria-pressed") === "true" ||
               l.getAttribute("aria-checked") === "true" ||
               l.classList.contains("selected")
-            ) {
-              return true;
-            }
+            ) return true;
           }
         }
         return false;
@@ -285,20 +252,13 @@ async function waitForColorSelected(page, color, timeoutMs = 12000) {
       { timeout: timeoutMs }
     );
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 /* -------------------- variant/media helpers -------------------- */
-
-// current variant id as string
 async function getCurrentVariantId(page) {
   try {
-    const val = await page.$eval(
-      'form[action*="/cart/add"] input[name="id"]',
-      (el) => el.value
-    );
+    const val = await page.$eval('form[action*="/cart/add"] input[name="id"]', (el) => el.value);
     return val ? String(val) : "";
   } catch {
     try {
@@ -307,19 +267,14 @@ async function getCurrentVariantId(page) {
         (el) => el.getAttribute("data-product-selected-variant-id")
       );
       return val2 ? String(val2) : "";
-    } catch {
-      return "";
-    }
+    } catch { return ""; }
   }
 }
-
-// read featured_media.id for a given variant id
 async function getVariantFeaturedMediaId(page, variantId) {
   return await page.evaluate((vid) => {
     function findIn(obj) {
       if (!obj) return null;
-      const variants =
-        obj.variants || (obj.product && obj.product.variants) || [];
+      const variants = obj.variants || (obj.product && obj.product.variants) || [];
       const v = variants?.find((x) => String(x.id) === String(vid));
       if (!v) return null;
       if (v.featured_media && (v.featured_media.id || v.featured_media.media_id)) {
@@ -328,27 +283,18 @@ async function getVariantFeaturedMediaId(page, variantId) {
       if (v.featured_media_id) return String(v.featured_media_id);
       return null;
     }
-
     const w = window;
     const candidates = [
-      w.productJson,
-      w.ProductJson,
-      w.__INITIAL_STATE__,
-      w.ShopifyAnalytics?.meta?.product,
-      w.meta?.product,
-      w.product,
-      w.theme?.product,
+      w.productJson, w.ProductJson, w.__INITIAL_STATE__,
+      w.ShopifyAnalytics?.meta?.product, w.meta?.product,
+      w.product, w.theme?.product,
     ];
-
     for (const c of candidates) {
       const mediaId = findIn(c);
       if (mediaId) return mediaId;
     }
-
     const scripts = Array.from(
-      document.querySelectorAll(
-        'script[type="application/json"], script[type="application/ld+json"]'
-      )
+      document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"]')
     );
     for (const s of scripts) {
       try {
@@ -360,39 +306,95 @@ async function getVariantFeaturedMediaId(page, variantId) {
     return null;
   }, variantId);
 }
-
-// click thumbnail that matches media id, return new hero src
+async function getActiveHeroMediaId(page) {
+  // many themes put data-media-id on active hero container
+  const sel = [
+    '.product__media-item.is-active[data-media-id]',
+    '.slider__slide.is-active [data-media-id]',
+    '[data-media-id].is-active',
+  ];
+  for (const s of sel) {
+    const el = await page.$(s);
+    if (el) {
+      try {
+        const mid = await page.$eval(s, (n) => n.getAttribute("data-media-id"));
+        if (mid) return mid;
+      } catch {}
+    }
+  }
+  return "";
+}
+async function listThumbCandidates(page) {
+  // return [{mediaId, alt, src, sel}] for ranking/matching
+  return await page.evaluate(() => {
+    const out = [];
+    const nodes = Array.from(
+      document.querySelectorAll(
+        '[data-media-id], .thumbnail-list__item img, .product__thumb img, .product-gallery__thumbnail img'
+      )
+    );
+    for (const n of nodes) {
+      const el = n.closest("[data-media-id]") || n;
+      const mediaId = el.getAttribute && el.getAttribute("data-media-id");
+      const img = n.tagName === "IMG" ? n : el.querySelector && el.querySelector("img");
+      const src = img ? (img.currentSrc || img.src || img.getAttribute("src") || "") : "";
+      const alt = (img && (img.alt || img.getAttribute("aria-label"))) || el.getAttribute?.("aria-label") || "";
+      const sel = el && el.id ? `#${el.id}` : "";
+      out.push({ mediaId: mediaId || "", alt: alt || "", src: src || "", sel });
+    }
+    return out;
+  });
+}
+function colorTokens(color) {
+  return (color || "")
+    .toLowerCase()
+    .split(/[\/\-\s]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+function scoreThumbAgainstColor(thumb, tokens) {
+  const hay = `${(thumb.alt || "").toLowerCase()} ${(thumb.src || "").toLowerCase()}`;
+  let score = 0;
+  for (const t of tokens) if (hay.includes(t)) score++;
+  return score;
+}
 async function clickThumbnailForMediaId(page, mediaId, prevInlineSrc) {
   if (!mediaId) return prevInlineSrc;
-
   const byAttr = page.locator(
     `[data-media-id="${mediaId}"], [data-media-id="${mediaId}"] img`
   ).first();
-
   if (await byAttr.count()) {
-    try {
-      await byAttr.click({ timeout: 4000 });
-    } catch {
-      await byAttr.click({ timeout: 4000, force: true });
-    }
+    await byAttr.click({ timeout: 4000, force: true }).catch(() => {});
     await page.waitForTimeout(100);
     await page.waitForLoadState("networkidle").catch(() => {});
     return await waitForHeroSrcChange(page, prevInlineSrc);
   }
-
-  // Fallback: click first available thumbnail
-  const any = thumbnailsLocator(page);
-  if (await any.count()) {
-    await any.first().click({ timeout: 4000, force: true }).catch(() => {});
-    await page.waitForLoadState("networkidle").catch(() => {});
-    return await waitForHeroSrcChange(page, prevInlineSrc);
+  return prevInlineSrc;
+}
+async function clickBestThumbForColor(page, color, prevInlineSrc) {
+  const candidates = await listThumbCandidates(page);
+  const tokens = colorTokens(color);
+  let best = null;
+  let bestScore = 0;
+  for (const c of candidates) {
+    const sc = scoreThumbAgainstColor(c, tokens);
+    if (sc > bestScore) { bestScore = sc; best = c; }
   }
-
+  if (best && (best.mediaId || best.sel)) {
+    const target = best.mediaId
+      ? page.locator(`[data-media-id="${best.mediaId}"]`).first()
+      : page.locator(best.sel).first();
+    if (await target.count()) {
+      await target.click({ timeout: 4000, force: true }).catch(() => {});
+      await page.waitForTimeout(100);
+      await page.waitForLoadState("networkidle").catch(() => {});
+      return await waitForHeroSrcChange(page, prevInlineSrc);
+    }
+  }
   return prevInlineSrc;
 }
 
-/* -------------------- color selection orchestrator -------------------- */
-
+/* -------------------- select color (with variant id wait) -------------------- */
 async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   const beforeVariantId = await getCurrentVariantId(page).catch(() => "");
 
@@ -411,9 +413,9 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
   }
 
   await page.waitForTimeout(100);
-  await waitForColorSelected(page, color, 12000);
+  await waitForColorSelected(page, color, 10000);
 
-  // wait for variant id change (strong signal)
+  // wait for variant id change
   try {
     await page.waitForFunction(
       (oldId) => {
@@ -421,7 +423,7 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
         return el && String(el.value) !== String(oldId);
       },
       beforeVariantId,
-      { timeout: 2000 }
+      { timeout: 2500 }
     );
   } catch {}
 
@@ -432,7 +434,6 @@ async function selectColorAndWait(page, labelLocator, color, prevInlineSrc) {
 }
 
 /* -------------------- main -------------------- */
-
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
 
@@ -450,7 +451,7 @@ export async function extractProductData(page, urlObj) {
   const price = extractPrice(priceText);
   const { cost, variantPrice } = calculatePrices(price);
 
-  // sizes (option1): collect ALL data-value entries
+  /* sizes (option1) -> list all, each becomes its own row later */
   const sizeValues = await page.$$eval(
     'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value], ' +
       'fieldset[data-index="option1"] .variant-input[data-index="option1"][data-value]',
@@ -458,7 +459,7 @@ export async function extractProductData(page, urlObj) {
   );
   const hasSizes = sizeValues.length > 0;
 
-  // build colors list from fieldset
+  /* colors */
   const colorFieldset = await page.$('fieldset[name="Color"]');
   const variantDetails = [];
   if (colorFieldset) {
@@ -479,53 +480,70 @@ export async function extractProductData(page, urlObj) {
       }
     }
   }
-
   const images = [];
 
-  // Helper: capture hi-res tied to current color (no URL dedup; per-color capture)
-  async function captureHiResForCurrentColor(color, prevInlineSrc = "") {
-    const ensuredSrc = await waitForHeroSrcChange(page, prevInlineSrc);
+  /* capture function that FIRST ensures the hero shows this color's media */
+  async function captureForColor(color, prevInlineSrc) {
+    // Resolve target media
+    const variantId = await getCurrentVariantId(page);
+    let heroSrc = prevInlineSrc;
+    let mediaId = await getVariantFeaturedMediaId(page, variantId);
+
+    // If variant lists a featured media id, prefer it:
+    if (mediaId) {
+      heroSrc = await clickThumbnailForMediaId(page, mediaId, heroSrc);
+    } else {
+      // If hero already has a data-media-id and changed, take it:
+      const activeHeroId = await getActiveHeroMediaId(page);
+      if (activeHeroId) {
+        heroSrc = await clickThumbnailForMediaId(page, activeHeroId, heroSrc);
+      } else {
+        // Best-effort: match thumbnails by color tokens (e.g., gold/white/chalk)
+        heroSrc = await clickBestThumbForColor(page, color, heroSrc);
+      }
+    }
+
+    const ensuredSrc = await waitForHeroSrcChange(page, heroSrc);
     const hasZoom = await page
       .locator("button.js-photoswipe__zoom, button.product__photo-zoom")
       .count();
     const hiRes = hasZoom ? await openZoomAndGetHiResSrc(page, ensuredSrc) : "";
-    const srcFinal = hiRes || (await readInlineHeroSrc(page)) || "";
+    const srcFinal = hiRes || (await readInlineHeroSrc(page)) || ensuredSrc || "";
     images.push({ handle, image: srcFinal, color });
   }
 
-  /* === Image capture === */
+  /* === image capture scenarios === */
   if (variantDetails.length === 0) {
-    // no colors: capture all thumbnails
+    // no colors: capture hero + thumbs
     let currentInline = await readInlineHeroSrc(page);
     const thumbs = thumbnailsLocator(page);
     const tCount = await thumbs.count();
     if (!tCount) {
-      await captureHiResForCurrentColor("", currentInline);
+      await captureForColor("", currentInline);
     } else {
       for (let i = 0; i < tCount; i++) {
         currentInline = await clickThumbnailAndWait(page, i, currentInline);
-        await captureHiResForCurrentColor("", currentInline);
+        await captureForColor("", currentInline);
       }
     }
   } else if (variantDetails.length === 1) {
-    // single color: save all images for that color
+    // single color: save all images mapped to that color
     const color = variantDetails[0].value || (await getCheckedColor(page)) || "";
     let currentInline = await readInlineHeroSrc(page);
     const thumbs = thumbnailsLocator(page);
     const tCount = await thumbs.count();
     if (!tCount) {
-      await captureHiResForCurrentColor(color, currentInline);
+      await captureForColor(color, currentInline);
     } else {
       for (let i = 0; i < tCount; i++) {
         currentInline = await clickThumbnailAndWait(page, i, currentInline);
-        await captureHiResForCurrentColor(color, currentInline);
+        await captureForColor(color, currentInline);
       }
     }
   } else {
-    // multiple colors: selected first, then others; for each, target its featured media id
+    // multiple colors: selected first, then each remaining (no repeats)
     const seen = new Set();
 
-    // process initially selected color first (if detectable)
     const initialCheckedColor = await getCheckedColor(page);
     const initEntry =
       (initialCheckedColor &&
@@ -535,60 +553,35 @@ export async function extractProductData(page, urlObj) {
     if (initEntry?.labelLocator) {
       const prevInline = await readInlineHeroSrc(page);
       const { checkedColor, newInlineSrc } = await selectColorAndWait(
-        page,
-        initEntry.labelLocator,
-        initEntry.value,
-        prevInline
+        page, initEntry.labelLocator, initEntry.value, prevInline
       );
-
-      // jump to this variant's featured media, then capture
-      const variantId = await getCurrentVariantId(page);
-      const mediaId = await getVariantFeaturedMediaId(page, variantId);
-      const afterThumbSrc = await clickThumbnailForMediaId(
-        page,
-        mediaId,
-        newInlineSrc
-      );
-      await captureHiResForCurrentColor(checkedColor || initEntry.value, afterThumbSrc);
+      await captureForColor(checkedColor || initEntry.value, newInlineSrc);
       seen.add((checkedColor || initEntry.value).toLowerCase());
     }
 
-    // process all remaining colors
     for (const v of variantDetails) {
       const key = (v.value || "").toLowerCase();
       if (!key || seen.has(key)) continue;
 
       const prevInline = await readInlineHeroSrc(page);
       const { checkedColor, newInlineSrc } = await selectColorAndWait(
-        page,
-        v.labelLocator,
-        v.value,
-        prevInline
+        page, v.labelLocator, v.value, prevInline
       );
-
-      const variantId = await getCurrentVariantId(page);
-      const mediaId = await getVariantFeaturedMediaId(page, variantId);
-      const afterThumbSrc = await clickThumbnailForMediaId(
-        page,
-        mediaId,
-        newInlineSrc
-      );
-      await captureHiResForCurrentColor(checkedColor || v.value, afterThumbSrc);
+      await captureForColor(checkedColor || v.value, newInlineSrc);
       seen.add((checkedColor || v.value).toLowerCase());
     }
   }
 
-  // colors list for building variant matrix
+  /* build variant matrix rows (Size × Color) */
   const allColorValues = variantDetails.map((v) => v.value);
   const hasColors = allColorValues.length > 0;
 
-  // first image per color
+  // pick first image per color for row image
   const colorImageMap = new Map();
   for (const img of images) {
     if (!colorImageMap.has(img.color)) colorImageMap.set(img.color, img.image);
   }
 
-  /* === Rows === */
   function makeRow({ size, color, isMain }) {
     return {
       Handle: handle,
@@ -601,9 +594,7 @@ export async function extractProductData(page, urlObj) {
       "Option2 Value": hasColors ? color || "" : "",
       "Variant Price": variantPrice.toFixed(2),
       "Cost per item": cost.toFixed(2),
-      "Image Src": hasColors
-        ? colorImageMap.get(color) || ""
-        : images[0]?.image || "",
+      "Image Src": hasColors ? (colorImageMap.get(color) || "") : (images[0]?.image || ""),
       "product.metafields.custom.original_prodect_url": isMain ? url : "",
       "Variant Fulfillment Service": "manual",
       "Variant Inventory Policy": "deny",
