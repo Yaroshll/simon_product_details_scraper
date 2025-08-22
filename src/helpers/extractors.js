@@ -457,10 +457,10 @@ export async function extractProductData(page, urlObj) {
   const colorImageMap = new Map();
   for (const { color, image } of images) {
     if (!colorImageMap.has(color)) colorImageMap.set(color, image);
+   console.log('fg',colorImageMap.get(color));
+   console.log('fg',colorImageMap.get(image));
 
   }
-  console.log('fg',colorImageMap.get(color));
-   console.log('fg',colorImageMap.get(image));
 
 
   const allColorValues = variantDetails.map((v) => v.value);
