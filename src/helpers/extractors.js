@@ -474,7 +474,7 @@ export async function extractProductData(page, urlObj) {
       "Option2 Value": hasColors ? (color || "") : "",
       "Variant Price": variantPrice.toFixed(2),
       "Cost per item": cost.toFixed(2),
-      "Image Src": hasColors ? (colorImageMap.get(color) || "") : ( (images[0]?.image) || "" ),
+      "Image Src": hasColors ? (colorImageMap.get(color) || "") : ( (images[1]?.image) || "" ),
       "product.metafields.custom.original_prodect_url": isMain ? url : "",
       "Variant Fulfillment Service": "manual",
       "Variant Inventory Policy": "deny",
