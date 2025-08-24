@@ -3,16 +3,14 @@ import { chromium } from "playwright";
 // Browser configuration constants
 const BROWSER_CONFIG = {
   LAUNCH_OPTIONS: {
-    headless: false,
+    headless: true,
     timeout: 12000,
+     channel: "chrome",
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
+      "--disable-gpu",
+      "--disable-dev-shm-usage",
+      "--disable-setuid-sandbox",
+      "--no-sandbox",
     ],
   },
   CONTEXT_OPTIONS: {
