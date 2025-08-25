@@ -353,20 +353,18 @@ async function clickThumbnailAndWait(page, index, previousHero) {
     await page.waitForTimeout(CONFIG.DELAYS.AFTER_CLICK);
     await page.waitForTimeout(CONFIG.DELAYS.THUMBNAIL_WAIT);
     
-    // Wait for image change with timeout, but don't fail if it doesn't work
-    try {
-      await waitForImageChange(page, previousImageState, 5000);
-    } catch (imageChangeError) {
-      console.warn(`⚠️ Thumbnail ${index} image change detection failed:`, imageChangeError.message);
-      // Continue anyway, the thumbnail click might still work
-    }
+    // Wait for image change with timeout
+    await waitForImageChange(page, previousImageState, 5000);
     
     return await waitForHeroSrcChange(page, previousHero);
-  } catch (error) {
-    console.warn(`Failed to click thumbnail at index ${index}:`, error.message);
-    // Return the previous image if thumbnail click fails
-    return previousHero;
-  }
+     } catch (error) {
+     console.warn(`Failed to click thumbnail at index ${index}:`, error.message);
+     // If image change detection failed, skip this thumbnail
+     if (error.message.includes('Image change detection')) {
+       console.log(`⚠️ Skipping thumbnail at index ${index} due to image change detection failure`);
+     }
+     return previousHero;
+   }
 }
 
 /* ==================== COLOR SELECTION HELPERS ==================== */
@@ -545,28 +543,18 @@ async function selectColor(page, labelLocator, color) {
  * @returns {Promise<{checkedColor: string, image: string}>} Variant data
  */
 async function clickColorAndResolveVariant(page, labelLocator, color) {
-  try {
-    // Get the current image state before clicking
-    const previousImageState = await getImageSlidesState(page);
-    
-    await selectColor(page, labelLocator, color);
-    
-    // Wait for image change with timeout
-    try {
-      await waitForImageChange(page, previousImageState, 5000);
-    } catch (imageChangeError) {
-      console.warn(`⚠️ Image change detection failed for color "${color}":`, imageChangeError.message);
-      // Continue anyway, the color selection might still work
-    }
-    
-    const heroImage = await readHiResHero(page);
-    const checkedColor = (await getCheckedColor(page)) || color;
-    
-    return { checkedColor, image: heroImage };
-  } catch (error) {
-    console.error(`❌ Failed to resolve variant for color "${color}":`, error.message);
-    throw error;
-  }
+  // Get the current image state before clicking
+  const previousImageState = await getImageSlidesState(page);
+  
+  await selectColor(page, labelLocator, color);
+  
+  // Wait for image change with timeout
+  await waitForImageChange(page, previousImageState, 5000);
+  
+  const heroImage = await readHiResHero(page);
+  const checkedColor = (await getCheckedColor(page)) || color;
+  
+  return { checkedColor, image: heroImage };
 }
 
 /* ==================== DATA EXTRACTION ==================== */
@@ -701,24 +689,37 @@ async function extractColorVariants(page) {
  */
 async function captureImagesForNoColors(page) {
   const images = [];
+  
+  // Always capture the main hero image first
   let heroImage = await readHiResHero(page);
-  
-  const thumbnails = getThumbnailLocator(page);
-  const thumbnailCount = await thumbnails.count();
-  
-  if (!thumbnailCount) {
+  if (heroImage) {
     images.push({
       color: "",
       image: normalizeShopifyImage(heroImage, CONFIG.IMAGE_SIZE),
     });
-  } else {
-    for (let i = 0; i < thumbnailCount; i++) {
-      heroImage = await clickThumbnailAndWait(page, i, heroImage);
-      images.push({
-        color: "",
-        image: normalizeShopifyImage(heroImage, CONFIG.IMAGE_SIZE),
-      });
+    
+    // Then capture additional thumbnail images if they exist
+    const thumbnails = getThumbnailLocator(page);
+    const thumbnailCount = await thumbnails.count();
+    
+    if (thumbnailCount > 0) {
+      for (let i = 0; i < thumbnailCount; i++) {
+        try {
+          const thumbnailImage = await clickThumbnailAndWait(page, i, heroImage);
+          if (thumbnailImage && thumbnailImage !== heroImage) {
+            images.push({
+              color: "",
+              image: normalizeShopifyImage(thumbnailImage, CONFIG.IMAGE_SIZE),
+            });
+          }
+        } catch (error) {
+          console.warn(`Failed to capture thumbnail ${i}:`, error.message);
+          continue;
+        }
+      }
     }
+  } else {
+    console.warn("No hero image found for product with no color variants");
   }
   
   return images;
@@ -733,35 +734,39 @@ async function captureImagesForNoColors(page) {
 async function captureImagesForSingleColor(page, variantDetails) {
   const images = [];
   const color = variantDetails[0].value || (await getCheckedColor(page)) || "";
-  let heroImage = await readHiResHero(page);
   
-  const thumbnails = getThumbnailLocator(page);
-  const thumbnailCount = await thumbnails.count();
+  // Always capture the main image for the selected color first
+  const { image: mainImage } = await clickColorAndResolveVariant(
+    page,
+    variantDetails[0].labelLocator,
+    color
+  );
   
-  if (!thumbnailCount) {
-    const { image } = await clickColorAndResolveVariant(
-      page,
-      variantDetails[0].labelLocator,
-      color
-    );
-    images.push({ color, image });
-  } else {
-    // Ensure selected variant is resolved first
-    const firstVariant = await clickColorAndResolveVariant(
-      page,
-      variantDetails[0].labelLocator,
-      color
-    );
-    images.push({ color, image: firstVariant.image });
+  if (mainImage) {
+    images.push({ color, image: mainImage });
     
-    // Capture all thumbnail images
-    for (let i = 0; i < thumbnailCount; i++) {
-      heroImage = await clickThumbnailAndWait(page, i, heroImage);
-      images.push({
-        color,
-        image: normalizeShopifyImage(heroImage, CONFIG.IMAGE_SIZE),
-      });
+    // Then capture additional thumbnail images if they exist
+    const thumbnails = getThumbnailLocator(page);
+    const thumbnailCount = await thumbnails.count();
+    
+    if (thumbnailCount > 0) {
+      for (let i = 0; i < thumbnailCount; i++) {
+        try {
+          const thumbnailImage = await clickThumbnailAndWait(page, i, mainImage);
+          if (thumbnailImage && thumbnailImage !== mainImage) {
+            images.push({
+              color,
+              image: normalizeShopifyImage(thumbnailImage, CONFIG.IMAGE_SIZE),
+            });
+          }
+        } catch (error) {
+          console.warn(`Failed to capture thumbnail ${i}:`, error.message);
+          continue;
+        }
+      }
     }
+  } else {
+    console.warn("No main image captured for single color variant");
   }
   
   return images;
@@ -795,240 +800,104 @@ async function captureImagesForMultipleColors(page, variantDetails) {
 }
 
 /**
- * Handles no sizes, multiple colors scenario
- * @param {Page} page - Playwright page object
- * @param {Array} variantDetails - Color variant details
- * @returns {Promise<Array<{color: string, image: string}>>} Image data
- */
-async function handleNoSizesMultipleColors(page, variantDetails) {
-  console.log(`✅ No sizes, multiple colors scenario detected`);
-  
-  const images = [];
-  const seenColors = new Set();
-  
-  for (const variant of variantDetails) {
-    const colorKey = (variant.value || "").toLowerCase();
-    if (!colorKey || seenColors.has(colorKey)) continue;
-    
-    try {
-      const { checkedColor, image } = await clickColorAndResolveVariant(
-        page,
-        variant.labelLocator,
-        variant.value
-      );
-      
-      if (image) {
-        images.push({ color: checkedColor, image });
-        seenColors.add(colorKey);
-        console.log(`✅ Successfully captured color: ${checkedColor}`);
-      }
-    } catch (error) {
-      console.warn(`❌ Failed to capture color "${variant.value}":`, error.message);
-      // Continue with other colors even if one fails
-    }
-  }
-  
-  return images;
-}
-
-/**
- * Handles multiple sizes, no colors scenario
- * @param {Page} page - Playwright page object
- * @param {Array} sizeDetails - Size variant details
- * @returns {Promise<Array<{color: string, image: string}>>} Image data
- */
-async function handleMultipleSizesNoColors(page, sizeDetails) {
-  console.log(`✅ Multiple sizes, no colors scenario detected`);
-  
-  const images = [];
-  
-  for (const sizeDetail of sizeDetails) {
-    console.log(`📏 Capturing images for size: ${sizeDetail.value}`);
-    
-    // Select the size
-    await selectSize(page, sizeDetail.labelLocator, sizeDetail.value);
-    await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
-    
-    // Get the hero image for this size
-    const heroImage = await readHiResHero(page);
-    images.push({ color: "", image: heroImage });
-    
-    // Capture thumbnail images if available
-    const thumbnails = getThumbnailLocator(page);
-    const thumbnailCount = await thumbnails.count();
-    if (thumbnailCount > 0) {
-      console.log(`📸 Capturing ${thumbnailCount} thumbnail images for size ${sizeDetail.value}`);
-      for (let i = 0; i < thumbnailCount; i++) {
-        const thumbnailImage = await clickThumbnailAndWait(page, i, heroImage);
-        images.push({ color: "", image: thumbnailImage });
-      }
-    }
-  }
-  
-  return images;
-}
-
-/* ==================== EDGE CASE HANDLING ==================== */
-
-/**
- * Handles one size, one color scenario
- * @param {Page} page - Playwright page object
- * @param {Object} sizeDetail - Size variant detail
- * @returns {Promise<Array<{color: string, image: string}>>} Image data
- */
-async function handleOneSizeOneColor(page, sizeDetail) {
-  console.log(`✅ One size, one color scenario detected`);
-  
-  // Select the single size first
-  await selectSize(page, sizeDetail.labelLocator, sizeDetail.value);
-  await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
-  
-  // Get the single color
-  const colors = await extractColorVariants(page);
-  if (colors.length === 0) {
-    // No colors, just capture images for the size
-    const heroImage = await readHiResHero(page);
-    const images = [{ color: "", image: heroImage }];
-    
-    // Capture thumbnail images if available
-    const thumbnails = getThumbnailLocator(page);
-    const thumbnailCount = await thumbnails.count();
-    if (thumbnailCount > 0) {
-      console.log(`📸 Capturing ${thumbnailCount} thumbnail images`);
-      for (let i = 0; i < thumbnailCount; i++) {
-        const thumbnailImage = await clickThumbnailAndWait(page, i, heroImage);
-        images.push({ color: "", image: thumbnailImage });
-      }
-    }
-    return images;
-  }
-  
-  const color = colors[0];
-  const { checkedColor, image } = await clickColorAndResolveVariant(
-    page, 
-    color.labelLocator, 
-    color.value
-  );
-  
-  const images = [{ color: checkedColor, image }];
-  
-  // Capture thumbnail images if available
-  const thumbnails = getThumbnailLocator(page);
-  const thumbnailCount = await thumbnails.count();
-  if (thumbnailCount > 0) {
-    console.log(`📸 Capturing ${thumbnailCount} thumbnail images`);
-    for (let i = 0; i < thumbnailCount; i++) {
-      const thumbnailImage = await clickThumbnailAndWait(page, i, image);
-      images.push({ color: checkedColor, image: thumbnailImage });
-    }
-  }
-  
-  return images;
-}
-
-/**
- * Handles one color, multiple sizes scenario
- * @param {Page} page - Playwright page object
- * @param {Array} sizeDetails - Size variant details
- * @param {Object} colorDetail - Color variant detail
- * @returns {Promise<Array<{color: string, image: string}>>} Image data
- */
-async function handleOneColorMultipleSizes(page, sizeDetails, colorDetail) {
-  console.log(`✅ One color, multiple sizes scenario detected`);
-  
-  // Select the first color first
-  await selectColor(page, colorDetail.labelLocator, colorDetail.value);
-  await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
-  
-  const images = [];
-  
-  // Capture images for each size with the same color
-  for (const sizeDetail of sizeDetails) {
-    console.log(`📏 Capturing images for size: ${sizeDetail.value}`);
-    
-    // Select the size
-    await selectSize(page, sizeDetail.labelLocator, sizeDetail.value);
-    await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
-    
-    // Get the hero image for this size
-    const heroImage = await readHiResHero(page);
-    images.push({ color: colorDetail.value, image: heroImage });
-    
-    // Capture thumbnail images if available
-    const thumbnails = getThumbnailLocator(page);
-    const thumbnailCount = await thumbnails.count();
-    if (thumbnailCount > 0) {
-      console.log(`📸 Capturing ${thumbnailCount} thumbnail images for size ${sizeDetail.value}`);
-      for (let i = 0; i < thumbnailCount; i++) {
-        const thumbnailImage = await clickThumbnailAndWait(page, i, heroImage);
-        images.push({ color: colorDetail.value, image: thumbnailImage });
-      }
-    }
-  }
-  
-  return images;
-}
-
-/**
  * Captures all product images with size-aware color extraction
  * @param {Page} page - Playwright page object
  * @param {Array} sizeDetails - Size variant details
  * @returns {Promise<Array<{color: string, image: string}>>} Image data
  */
 async function captureProductImages(page, sizeDetails) {
-  // If no sizes, fall back to original logic
+  console.log(`🔍 Starting image capture with ${sizeDetails.length} sizes`);
+  
+  // If no sizes, handle color variants only
   if (sizeDetails.length === 0) {
+    console.log("📏 No sizes detected, handling color variants only");
     const variantDetails = await extractColorVariants(page);
+    console.log(`🎨 Found ${variantDetails.length} color variants`);
+    
     if (variantDetails.length === 0) {
+      // No colors, no sizes - just capture all available images
+      console.log("🖼️ Scenario: No colors, no sizes - capturing all available images");
       return await captureImagesForNoColors(page);
     } else if (variantDetails.length === 1) {
+      // One color, no sizes - capture images for the single color
+      console.log("🖼️ Scenario: One color, no sizes - capturing images for single color");
       return await captureImagesForSingleColor(page, variantDetails);
     } else {
-      return await handleNoSizesMultipleColors(page, variantDetails);
+      // Multiple colors, no sizes - capture one image per color
+      console.log("🖼️ Scenario: Multiple colors, no sizes - capturing one image per color");
+      return await captureImagesForMultipleColors(page, variantDetails);
     }
   }
 
-  console.log(`🔄 Starting size-aware color extraction with ${sizeDetails.length} sizes`);
-
-  // Special handling for one size scenarios
-  if (sizeDetails.length === 1) {
-    console.log(`📏 Single size detected: ${sizeDetails[0].value}`);
-    return await handleOneSizeOneColor(page, sizeDetails[0]);
-  }
-
-  // Get initial colors to determine the scenario
-  const initialColors = await extractColorVariants(page);
-  
-  // Special handling for one color, multiple sizes scenario
-  if (initialColors.length === 1 && sizeDetails.length > 1) {
-    return await handleOneColorMultipleSizes(page, sizeDetails, initialColors[0]);
-  }
-  
-  // Special handling for multiple sizes, no colors scenario
-  if (initialColors.length === 0 && sizeDetails.length > 1) {
-    return await handleMultipleSizesNoColors(page, sizeDetails);
-  }
-
-  // Normal multi-size, multi-color logic
   const images = [];
   const capturedColors = new Set();
   const allColors = new Set();
-  const failedColors = new Set();
+
+  console.log(`🔄 Starting size-aware color extraction with ${sizeDetails.length} sizes`);
+
   // First, get all possible colors from the first size
   await selectSize(page, sizeDetails[0].labelLocator, sizeDetails[0].value);
+  
+  // Wait before extracting colors
   await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
   
-  const firstSizeColors = await extractColorVariants(page);
-  firstSizeColors.forEach(color => allColors.add(color.value));
+  const initialColors = await extractColorVariants(page);
+  initialColors.forEach(color => allColors.add(color.value));
 
   console.log(`🎨 Found ${allColors.size} total colors: ${Array.from(allColors).join(', ')}`);
 
+  // Special case: If there's only one color but multiple sizes, capture images for each size
+  if (allColors.size === 1 && sizeDetails.length > 1) {
+    console.log(`🎯 Special case: One color (${Array.from(allColors)[0]}) with multiple sizes. Capturing images for each size.`);
+    console.log(`📏 Sizes to process: ${sizeDetails.map(s => s.value).join(', ')}`);
+    
+    for (const sizeDetail of sizeDetails) {
+      try {
+        await selectSize(page, sizeDetail.labelLocator, sizeDetail.value);
+        await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
+        
+        const colorDetails = await extractColorVariants(page);
+        if (colorDetails.length > 0) {
+          const { checkedColor, image } = await clickColorAndResolveVariant(
+            page,
+            colorDetails[0].labelLocator,
+            colorDetails[0].value
+          );
+          
+          if (image) {
+            images.push({ color: checkedColor, image });
+            console.log(`✅ Captured image for size ${sizeDetail.value}`);
+          } else {
+            console.warn(`⚠️ No image captured for size ${sizeDetail.value}`);
+          }
+        } else {
+          console.warn(`⚠️ No color details found for size ${sizeDetail.value}`);
+        }
+      } catch (error) {
+        console.warn(`❌ Failed to capture image for size ${sizeDetail.value}:`, error.message);
+        continue;
+      }
+    }
+    
+    if (images.length > 0) {
+      console.log(`🎉 Successfully captured ${images.length} images for one color with multiple sizes`);
+      return images;
+    } else {
+      console.warn("⚠️ No images captured for one color with multiple sizes, falling back to standard logic");
+    }
+  }
+
+  // Track failed colors to avoid retrying them
+  const failedColors = new Set();
+  
   // Try each size to capture missing colors
   for (const sizeDetail of sizeDetails) {
     console.log(`\n📏 Trying size: ${sizeDetail.value}`);
     
     // Select the size
     await selectSize(page, sizeDetail.labelLocator, sizeDetail.value);
+    
+    // Wait before extracting colors for this size
     await page.waitForTimeout(CONFIG.DELAYS.BEFORE_EXTRACTION);
     
     // Get available colors for this size
@@ -1220,22 +1089,48 @@ function generateProductRows({
       }
     }
   } else if (hasSizes && !hasColors) {
+    // Multiple sizes, no colors - create a row for each size
     let isFirst = true;
     for (const sizeDetail of sizeDetails) {
       rows.push(createRow(sizeDetail.value, "", isFirst));
       isFirst = false;
     }
   } else if (!hasSizes && hasColors) {
+    // No sizes, but has colors - create a row for each color
     let isFirst = true;
     for (const color of colorValues) {
       rows.push(createRow("", color, isFirst));
       isFirst = false;
     }
   } else {
+    // No sizes, no colors - single product
     rows.push(createRow("", "", true));
   }
   
   return rows;
+}
+
+/**
+ * Generates extra image rows for additional product images
+ * @param {Object} params - Extra image parameters
+ * @returns {Array<Object>} Array of extra image rows
+ */
+function generateExtraImageRows({
+  handle,
+  images,
+}) {
+  const extraImageRows = [];
+  
+  // Skip the first image (main image) and add the rest as extra images
+  for (let i = 1; i < images.length; i++) {
+    const { color, image } = images[i];
+    extraImageRows.push({
+      Handle: handle,
+      "Image Src": image,
+    });
+  }
+  
+  return extraImageRows;
 }
 
 /* ==================== MAIN EXTRACTION FUNCTION ==================== */
@@ -1244,7 +1139,7 @@ function generateProductRows({
  * Extracts complete product data from a Shopify product page
  * @param {Page} page - Playwright page object
  * @param {Object} urlObj - URL object containing url, tags, brand, typeitem
- * @returns {Promise<Array<Object>>} Array of product rows for CSV export
+ * @returns {Promise<{productRows: Array<Object>, extraImageRows: Array<Object>}>} Object containing product rows and extra image rows
  */
 export async function extractProductData(page, urlObj) {
   const { url, tags, brand, typeitem } = urlObj;
@@ -1279,30 +1174,6 @@ export async function extractProductData(page, urlObj) {
     const sizeDetails = await extractSizeOptions(page);
     const initialColorDetails = await extractColorVariants(page);
     
-    console.log(`📊 Product variant analysis:`);
-    console.log(`   📏 Sizes found: ${sizeDetails.length}`);
-    console.log(`   🎨 Colors found: ${initialColorDetails.length}`);
-    
-    // Determine product state for better error handling
-    let productState = "unknown";
-    if (sizeDetails.length === 0 && initialColorDetails.length === 0) {
-      productState = "no-variants";
-    } else if (sizeDetails.length === 1 && initialColorDetails.length === 1) {
-      productState = "one-size-one-color";
-    } else if (sizeDetails.length === 0 && initialColorDetails.length > 0) {
-      productState = "no-sizes-multi-colors";
-    } else if (sizeDetails.length > 0 && initialColorDetails.length === 0) {
-      productState = "multi-sizes-no-colors";
-    } else if (sizeDetails.length === 1 && initialColorDetails.length > 1) {
-      productState = "one-size-multi-colors";
-    } else if (sizeDetails.length > 1 && initialColorDetails.length === 1) {
-      productState = "multi-sizes-one-color";
-    } else if (sizeDetails.length > 1 && initialColorDetails.length > 1) {
-      productState = "multi-sizes-multi-colors";
-    }
-    
-    console.log(`🔍 Product state: ${productState}`);
-    
     // Capture product images with size-aware logic
     const images = await captureProductImages(page, sizeDetails);
     const colorImageMap = createColorImageMap(images);
@@ -1310,12 +1181,8 @@ export async function extractProductData(page, urlObj) {
     // Only use successfully captured colors for the CSV
     const successfulColorValues = Array.from(colorImageMap.keys());
     
-    console.log(`📸 Image capture results:`);
-    console.log(`   ✅ Images captured: ${images.length}`);
-    console.log(`   🎨 Colors with images: ${successfulColorValues.length}`);
-    
     // Generate product rows
-    const rows = generateProductRows({
+    const productRows = generateProductRows({
       ...basicInfo,
       tags,
       sizeDetails,
@@ -1327,12 +1194,40 @@ export async function extractProductData(page, urlObj) {
       typeitem,
     });
     
+    // Generate extra image rows
+    const extraImageRows = generateExtraImageRows({
+      handle: basicInfo.handle,
+      images,
+    });
+    
+    // Ensure we have at least some data
+    if (productRows.length === 0 && extraImageRows.length === 0) {
+      console.warn("⚠️ No product rows or extra images generated, creating fallback row");
+      const fallbackRow = createProductRow({
+        ...basicInfo,
+        tags,
+        sizeDetails: [],
+        colorValues: [],
+        colorImageMap: new Map(),
+        images: [],
+        url,
+        brand,
+        typeitem,
+        isMain: true,
+      });
+      productRows.push(fallbackRow);
+    }
+    
     console.log("✅ Product data extraction completed successfully");
-    return rows;
+    console.log(`📊 Generated ${productRows.length} product rows and ${extraImageRows.length} extra image rows`);
+    
+    return {
+      productRows,
+      extraImageRows,
+    };
     
   } catch (error) {
     console.error("❌ Failed to extract product data:", error.message);
     throw error;
   }
 }
-
