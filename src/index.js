@@ -83,7 +83,7 @@ const PRODUCT_URLS = [
  * @param {Object} urlObj - URL object containing url, tags, brand, typeitem
  * @param {number} index - Current URL index for logging
  * @param {number} total - Total number of URLs
- * @returns {Promise<{success: boolean, data: {productRows: Array<Object>, extraImageRows: Array<Object>}, url: Object}>} Extracted product data
+ * @returns {Promise<Array<Object>>} Extracted product data
  */
 async function processSingleUrl(page, urlObj, index, total) {
   const { url } = urlObj;
@@ -92,19 +92,15 @@ async function processSingleUrl(page, urlObj, index, total) {
     console.log(`\n🔎 [${index}/${total}] Extracting: ${url}`);
 
     const startTime = Date.now();
-    const { productRows, extraImageRows } = await extractProductData(page, urlObj);
+    const productRows = await extractProductData(page, urlObj);
     const endTime = Date.now();
 
     const duration = ((endTime - startTime) / 1000).toFixed(2);
     console.log(
-      `✅ Finished: ${url} — Extracted ${productRows.length} product rows and ${extraImageRows.length} extra image rows in ${duration}s`
+      `✅ Finished: ${url} — Extracted ${productRows.length} rows in ${duration}s`
     );
 
-    return { 
-      success: true, 
-      data: { productRows, extraImageRows }, 
-      url: urlObj 
-    };
+    return { success: true, data: productRows, url: urlObj };
   } catch (error) {
     console.error(`❌ Error extracting ${url}:`, error.message);
     return { success: false, error: error.message, url: urlObj };
@@ -129,11 +125,7 @@ async function processUrlsInBatches(page, urls) {
     const result = await processSingleUrl(page, urlObj, i + 1, urls.length);
 
     if (result.success) {
-      successful.push(...result.data.productRows);
-      // Add extra image rows to successful as well
-      if (result.data.extraImageRows.length > 0) {
-        successful.push(...result.data.extraImageRows);
-      }
+      successful.push(...result.data);
     } else {
       failed.push(result.url);
     }
