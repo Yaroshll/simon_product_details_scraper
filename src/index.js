@@ -15,7 +15,7 @@ const CONFIG = {
 // Sample product URLs to scrape
 const PRODUCT_URLS = [
   {
-    url: "https://shop.simon.com/products/black-logo-buckle-county-belt?crpid=7151352938556&cid=adClick:collection",
+    url: "https://shop.simon.com/products/womens-timberland-pro-core-long-sleeve-t-shirt?crpid=7825485004860&cid=adClick:collection",
     status: "accepted",
     reason: "Meets all criteria",
     brand: "Marcelo Burlon",
