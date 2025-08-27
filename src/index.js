@@ -107,6 +107,7 @@ async function processSingleUrl(page, urlObj, index, total) {
   }
 }
 
+
 /**
  * Processes URLs in batches to avoid overwhelming the server
  *
