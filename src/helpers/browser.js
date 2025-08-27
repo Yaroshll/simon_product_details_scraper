@@ -3,7 +3,7 @@ import { chromium } from "playwright";
 // Browser configuration constants
 const BROWSER_CONFIG = {
   LAUNCH_OPTIONS: {
-    headless: false,
+    headless: true,
     timeout: 12000,
     args: [
       '--no-sandbox',
