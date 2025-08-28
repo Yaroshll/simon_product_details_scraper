@@ -16,6 +16,7 @@ const CONFIG = {
     WAIT_FOR_COLOR: 5000,
     SIZE_SELECTION: 4000,
     ELEMENT_WAIT: 2000,
+    IMAGE_CHANGE: 15000, // Increased from 5000ms to 15000ms
   },
   DELAYS: {
     PAGE_WAIT: 2000,
@@ -49,6 +50,17 @@ const SELECTORS = {
     'fieldset:not([name="Color"]) .variant-input[data-value]',
   ],
   HERO_IMAGE: `div.product__photos .slick-track .slick-slide[aria-hidden="false"] img`,
+  HERO_IMAGE_FALLBACKS: [
+    `div.product__photos .slick-track .slick-slide[aria-hidden="false"] img`,
+    `div.product__photos img[data-photoswipe-src]`,
+    `div.product__photos img[src*="cdn.shopify.com"]`,
+    `div.product__photos img`,
+    `.product__media img`,
+    `.product-gallery img`,
+    `[data-media-id] img`,
+    `img[data-photoswipe-src]`,
+    `img[src*="cdn.shopify.com"]`,
+  ],
   THUMBNAILS: [
     "[data-media-id].product__thumb",
     ".thumbnail-list__item [data-media-id]",
@@ -197,27 +209,74 @@ function pickLargestFromSrcset(srcset) {
 /* ==================== HERO IMAGE EXTRACTION ==================== */
 
 /**
- * Reads high-resolution hero image from the page
+ * Reads high-resolution hero image from the page with fallback selectors
  * @param {Page} page - Playwright page object
  * @returns {Promise<string>} Hero image URL
  */
 async function readHiResHero(page) {
   try {
-    // Wait for hero image to be present
-    const exists = await page.$(SELECTORS.HERO_IMAGE);
-    if (!exists) {
-      // Try waiting for it to appear
-      await page.waitForSelector(SELECTORS.HERO_IMAGE, { timeout: 3000 }).catch(() => {
-        console.warn("Hero image not found after waiting");
-      });
+    // Try the primary selector first
+    let imageData = null;
+    let selectorUsed = SELECTORS.HERO_IMAGE;
+    
+    try {
+      const exists = await page.$(SELECTORS.HERO_IMAGE);
+      if (exists) {
+        imageData = await page.$eval(SELECTORS.HERO_IMAGE, (img) => {
+          const rawData = img.getAttribute("data-photoswipe-src") || "";
+          const srcset = img.getAttribute("srcset") || img.getAttribute("data-srcset") || "";
+          const current = img.currentSrc || img.getAttribute("src") || "";
+          return { rawData, srcset, current };
+        });
+      }
+    } catch (error) {
+      console.log("Primary hero image selector failed, trying fallbacks...");
     }
-
-    const imageData = await page.$eval(SELECTORS.HERO_IMAGE, (img) => {
-      const rawData = img.getAttribute("data-photoswipe-src") || "";
-      const srcset = img.getAttribute("srcset") || img.getAttribute("data-srcset") || "";
-      const current = img.currentSrc || img.getAttribute("src") || "";
-      return { rawData, srcset, current };
-    });
+    
+    // If primary selector failed, try fallback selectors
+    if (!imageData) {
+      for (const fallbackSelector of SELECTORS.HERO_IMAGE_FALLBACKS) {
+        try {
+          const exists = await page.$(fallbackSelector);
+          if (exists) {
+            imageData = await page.$eval(fallbackSelector, (img) => {
+              const rawData = img.getAttribute("data-photoswipe-src") || "";
+              const srcset = img.getAttribute("srcset") || img.getAttribute("data-srcset") || "";
+              const current = img.currentSrc || img.getAttribute("src") || "";
+              return { rawData, srcset, current };
+            });
+            selectorUsed = fallbackSelector;
+            console.log(`✅ Found hero image using fallback selector: ${fallbackSelector}`);
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    }
+    
+      if (!imageData) {
+    console.warn("No hero image found with any selector, trying generic image fallback...");
+    
+    // Last resort: try to find any image on the page
+    try {
+      const anyImage = await page.$eval('img[src*="cdn.shopify.com"]', (img) => {
+        const src = img.getAttribute("src") || "";
+        const dataSrc = img.getAttribute("data-src") || "";
+        const dataPhotoswipeSrc = img.getAttribute("data-photoswipe-src") || "";
+        return dataPhotoswipeSrc || dataSrc || src;
+      });
+      
+      if (anyImage) {
+        console.log("✅ Found fallback image using generic selector");
+        return toAbsoluteUrl(anyImage);
+      }
+    } catch (error) {
+      console.warn("No fallback images found either");
+    }
+    
+    return "";
+  }
 
     if (imageData.rawData) return toAbsoluteUrl(imageData.rawData);
     
@@ -257,7 +316,7 @@ async function getImageSlidesState(page) {
  * @param {number} timeout - Timeout in milliseconds
  * @returns {Promise<boolean>} Whether the state changed
  */
-async function waitForImageChange(page, previousState, timeout = 5000) {
+async function waitForImageChange(page, previousState, timeout = CONFIG.TIMEOUTS.IMAGE_CHANGE) {
   try {
     await page.waitForFunction(
       (expectedPreviousState) => {
@@ -285,8 +344,9 @@ async function waitForImageChange(page, previousState, timeout = 5000) {
     console.log("✅ Image change detected");
     return true;
   } catch (error) {
-    console.warn("⚠️ Image change detection timeout, throwing error...");
-    throw new Error("Image change detection failed: " + error.message);
+    console.warn(`⚠️ Image change detection timeout after ${timeout}ms, continuing anyway...`);
+    // Don't throw error, just return false to indicate no change was detected
+    return false;
   }
 }
 
@@ -356,7 +416,10 @@ async function clickThumbnailAndWait(page, index, previousHero) {
     await page.waitForTimeout(CONFIG.DELAYS.THUMBNAIL_WAIT);
     
     // Wait for image change with timeout
-    await waitForImageChange(page, previousImageState, 5000);
+    const imageChanged = await waitForImageChange(page, previousImageState, CONFIG.TIMEOUTS.IMAGE_CHANGE);
+    if (!imageChanged) {
+      console.warn("⚠️ Image change detection failed, but continuing anyway...");
+    }
     
     return await waitForHeroSrcChange(page, previousHero);
      } catch (error) {
@@ -545,18 +608,40 @@ async function selectColor(page, labelLocator, color) {
  * @returns {Promise<{checkedColor: string, image: string}>} Variant data
  */
 async function clickColorAndResolveVariant(page, labelLocator, color) {
-  // Get the current image state before clicking
-  const previousImageState = await getImageSlidesState(page);
-  
-  await selectColor(page, labelLocator, color);
-  
-  // Wait for image change with timeout
-  await waitForImageChange(page, previousImageState, 5000);
-  
-  const heroImage = await readHiResHero(page);
-  const checkedColor = (await getCheckedColor(page)) || color;
-  
-  return { checkedColor, image: heroImage };
+  try {
+    // Get the current image state before clicking
+    const previousImageState = await getImageSlidesState(page);
+    
+    await selectColor(page, labelLocator, color);
+    
+    // Wait for image change with timeout
+    const imageChanged = await waitForImageChange(page, previousImageState, CONFIG.TIMEOUTS.IMAGE_CHANGE);
+    if (!imageChanged) {
+      console.warn("⚠️ Image change detection failed, but continuing anyway...");
+    }
+    
+    const heroImage = await readHiResHero(page);
+    const checkedColor = (await getCheckedColor(page)) || color;
+    
+    return { checkedColor, image: heroImage };
+  } catch (error) {
+    console.warn(`⚠️ Error in clickColorAndResolveVariant for color "${color}":`, error.message);
+    
+    // Try to get the image anyway without waiting for change
+    try {
+      const heroImage = await readHiResHero(page);
+      const checkedColor = (await getCheckedColor(page)) || color;
+      
+      if (heroImage) {
+        console.log(`✅ Recovered image for color "${color}" despite error`);
+        return { checkedColor, image: heroImage };
+      }
+    } catch (fallbackError) {
+      console.warn(`❌ Fallback image capture also failed for color "${color}":`, fallbackError.message);
+    }
+    
+    return { checkedColor: color, image: "" };
+  }
 }
 
 /* ==================== DATA EXTRACTION ==================== */
@@ -960,10 +1045,6 @@ async function captureProductImages(page, sizeDetails) {
         } catch (error) {
           console.warn(`❌ Failed to capture color "${color}"`, error.message);
           failedColors.add(color);
-          // If image change detection failed, skip this color
-          if (error.message.includes('Image change detection')) {
-            console.log(`⚠️ Skipping color "${color}" due to image change detection failure`);
-          }
         }
       }
     
@@ -1249,9 +1330,6 @@ async function captureImagesForMultipleColorsMultipleSizes(page, variantDetails,
       } catch (error) {
         console.warn(`❌ Failed to capture color "${color}":`, error.message);
         failedColors.add(color);
-        if (error.message.includes('Image change detection')) {
-          console.log(`⚠️ Skipping color "${color}" due to image change detection failure`);
-        }
       }
     }
     
