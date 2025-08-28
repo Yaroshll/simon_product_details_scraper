@@ -440,7 +440,7 @@ async function clickThumbnailAndWait(page, index, previousHero) {
  * @returns {Promise<string>} Selected color value
  */
 async function getCheckedColor(page) {
-  return await page.evaluate((selectors) => {
+  const found = await page.evaluate((selectors) => {
     // Check radio buttons first
     for (const selector of selectors.radios) {
       const element = document.querySelector(selector);
@@ -462,6 +462,36 @@ async function getCheckedColor(page) {
     
     return "";
   }, { radios: SELECTORS.COLOR_RADIOS });
+
+  if (found && found.trim() !== "") return found.trim();
+
+  // Fallback: read from variant label info block (e.g., VariantColorLabel-...)
+  const fromInfo = await readColorFromVariantLabelInfo(page);
+  return fromInfo;
+}
+
+/**
+ * Reads color text from the variant label info block when option value is empty
+ * Looks for: span.variant__label-info > span[id^="VariantColorLabel"]
+ * @param {Page} page
+ * @returns {Promise<string>}
+ */
+async function readColorFromVariantLabelInfo(page) {
+  try {
+    const txt = await page.evaluate(() => {
+      const info = document.querySelector('span.variant__label-info');
+      if (!info) return '';
+      const colorSpan = info.querySelector('span[id^="VariantColorLabel"]');
+      let text = colorSpan?.textContent?.trim() || '';
+      // Remove leading dash or em dash commonly present before the value
+      text = text.replace(/^[-—]\s*/, '').trim();
+      return text;
+    });
+    return txt || "";
+  } catch (error) {
+    console.warn('Failed to read color from variant label info:', error.message);
+    return "";
+  }
 }
 
 /**
@@ -832,6 +862,18 @@ async function captureImagesForSingleColor(page, variantDetails) {
   if (mainImage) {
     images.push({ color, image: normalizeShopifyImage(mainImage, CONFIG.IMAGE_SIZE) });
     
+    // Try to open PhotoSwipe lightbox and collect all high-res images when only one color
+    try {
+      const collectedFromLightbox = await captureImagesFromPhotoSwipe(page, color, new Set(images.map(i => i.image)));
+      if (collectedFromLightbox.length > 0) {
+        for (const item of collectedFromLightbox) {
+          images.push(item);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to collect images from PhotoSwipe:", e.message);
+    }
+    
     // Then capture additional thumbnail images if they exist
     const thumbnails = getThumbnailLocator(page);
     const thumbnailCount = await thumbnails.count();
@@ -857,6 +899,74 @@ async function captureImagesForSingleColor(page, variantDetails) {
   }
   
   return images;
+}
+
+/**
+ * Attempts to open PhotoSwipe lightbox and collect all images inside .pswp__container
+ * Returns normalized, deduplicated list excluding any already present in existingImages.
+ * @param {Page} page
+ * @param {string} color
+ * @param {Set<string>} existingImages
+ * @returns {Promise<Array<{color: string, image: string}>>}
+ */
+async function captureImagesFromPhotoSwipe(page, color, existingImages = new Set()) {
+  const results = [];
+  try {
+    // If the lightbox is not present, try to open it by clicking the hero image
+    const isOpen = await page.$('.pswp__container');
+    if (!isOpen) {
+      const clickSelectors = [SELECTORS.HERO_IMAGE, ...SELECTORS.HERO_IMAGE_FALLBACKS];
+      for (const sel of clickSelectors) {
+        try {
+          const el = await page.$(sel);
+          if (el) {
+            await el.click({ force: true, timeout: 2000 }).catch(() => {});
+            await page.waitForTimeout(150);
+            const opened = await page.waitForSelector('.pswp__container', { timeout: 2000 }).catch(() => null);
+            if (opened) break;
+          }
+        } catch (_) {
+          // continue trying other selectors
+        }
+      }
+    }
+
+    // Collect images from the lightbox container
+    const lightboxImages = await page.evaluate(() => {
+      const container = document.querySelector('.pswp__container');
+      if (!container) return [];
+      const imgs = Array.from(container.querySelectorAll('img.pswp__img'));
+      return imgs
+        .map(img => img.getAttribute('src') || '')
+        .filter(Boolean);
+    });
+
+    for (const raw of lightboxImages) {
+      const abs = toAbsoluteUrl(raw);
+      const normalized = normalizeShopifyImage(abs, '1800x1800');
+      if (normalized && !existingImages.has(normalized)) {
+        results.push({ color, image: normalized });
+        existingImages.add(normalized);
+      }
+    }
+
+    // Close the lightbox if it's open
+    const lightboxStillOpen = await page.$('.pswp__container');
+    if (lightboxStillOpen) {
+      // Try close button first
+      const closeBtn = await page.$('.pswp__button--close, button[title="Close (Esc)"]');
+      if (closeBtn) {
+        await closeBtn.click({ force: true }).catch(() => {});
+      } else {
+        // Fallback: press Escape
+        await page.keyboard.press('Escape').catch(() => {});
+      }
+      await page.waitForTimeout(100);
+    }
+  } catch (error) {
+    console.warn('PhotoSwipe collection failed:', error.message);
+  }
+  return results;
 }
 
 /**
@@ -1480,7 +1590,7 @@ function createProductRow({
     "product.metafields.custom.brand": isMain ? brand || "" : "",
     "product.metafields.custom.item_type": isMain ? typeitem || "" : "",
     Type: isMain ? "USA Products" : "",
-    Vendor: isMain ? "simon" : "",
+    Vendor: isMain ? "Simon" : "",
     Published: isMain ? "TRUE" : "",
   };
 }
