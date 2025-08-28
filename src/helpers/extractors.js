@@ -821,13 +821,29 @@ async function captureProductImages(page, sizeDetails) {
       console.log("🖼️ Scenario: No colors, no sizes - capturing all available images");
       return await captureImagesForNoColors(page);
     } else if (variantDetails.length === 1) {
-      // One color, no sizes - capture images for the single color
-      console.log("🖼️ Scenario: One color, no sizes - capturing images for single color");
+      // One color, no sizes - capture ALL images for the single color
+      console.log("🖼️ Scenario: One color, no sizes - capturing ALL images for single color");
       return await captureImagesForSingleColor(page, variantDetails);
     } else {
-      // Multiple colors, no sizes - capture one image per color
-      console.log("🖼️ Scenario: Multiple colors, no sizes - capturing one image per color");
+      // Multiple colors, no sizes - capture ONE image per color
+      console.log("🖼️ Scenario: Multiple colors, no sizes - capturing ONE image per color");
       return await captureImagesForMultipleColors(page, variantDetails);
+    }
+  }
+
+  // If no colors but has sizes, handle size variants only
+  const colorVariants = await extractColorVariants(page);
+  if (colorVariants.length === 0 && sizeDetails.length > 0) {
+    console.log("🎨 No colors detected, handling size variants only");
+    
+    if (sizeDetails.length === 1) {
+      // One size, no colors - capture ALL images
+      console.log("🖼️ Scenario: One size, no colors - capturing ALL images");
+      return await captureImagesForNoColors(page);
+    } else {
+      // Multiple sizes, no colors - capture images for each size
+      console.log("🖼️ Scenario: Multiple sizes, no colors - capturing images for each size");
+      return await captureImagesForNoColorsMultipleSizes(page, sizeDetails);
     }
   }
 
