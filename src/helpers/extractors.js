@@ -937,16 +937,19 @@ async function captureImagesFromPhotoSwipe(page, color, existingImages = new Set
       if (!container) return [];
       const imgs = Array.from(container.querySelectorAll('img.pswp__img'));
       return imgs
-        .map(img => img.getAttribute('src') || '')
-        .filter(Boolean);
+        .map(img => ({
+          src: img.getAttribute('src') || '',
+          isPlaceholder: img.classList.contains('pswp__img--placeholder'),
+        }))
+        .filter(item => !!item.src);
     });
 
-    for (const raw of lightboxImages) {
-      const abs = toAbsoluteUrl(raw);
-      const normalized = normalizeShopifyImage(abs, '1800x1800');
-      if (normalized && !existingImages.has(normalized)) {
-        results.push({ color, image: normalized });
-        existingImages.add(normalized);
+    for (const item of lightboxImages) {
+      const abs = toAbsoluteUrl(item.src);
+      const finalUrl = item.isPlaceholder ? abs : normalizeShopifyImage(abs, '1800x1800');
+      if (finalUrl && !existingImages.has(finalUrl)) {
+        results.push({ color, image: finalUrl });
+        existingImages.add(finalUrl);
       }
     }
 
