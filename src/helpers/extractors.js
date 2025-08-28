@@ -745,7 +745,7 @@ async function captureImagesForSingleColor(page, variantDetails) {
   );
   
   if (mainImage) {
-    images.push({ color, image: mainImage });
+    images.push({ color, image: normalizeShopifyImage(mainImage, CONFIG.IMAGE_SIZE) });
     
     // Then capture additional thumbnail images if they exist
     const thumbnails = getThumbnailLocator(page);
@@ -794,7 +794,9 @@ async function captureImagesForMultipleColors(page, variantDetails) {
       variant.value
     );
     
-    images.push({ color: checkedColor, image });
+    if (image) {
+      images.push({ color: checkedColor, image: normalizeShopifyImage(image, CONFIG.IMAGE_SIZE) });
+    }
     seenColors.add(colorKey);
   }
   
@@ -883,7 +885,7 @@ async function captureProductImages(page, sizeDetails) {
           );
           
           if (image) {
-            images.push({ color: checkedColor, image });
+            images.push({ color: checkedColor, image: normalizeShopifyImage(image, CONFIG.IMAGE_SIZE) });
             console.log(`✅ Captured image for size ${sizeDetail.value}`);
           } else {
             console.warn(`⚠️ No image captured for size ${sizeDetail.value}`);
@@ -924,46 +926,46 @@ async function captureProductImages(page, sizeDetails) {
     
     console.log(`✅ Available colors for ${sizeDetail.value}: ${availableColorValues.join(', ')}`);
     
-    // Try to capture images for colors we haven't captured yet and haven't failed
-    for (const colorDetail of availableColors) {
-      const { value: color, labelLocator, isAvailable } = colorDetail;
-      
-      if (!isAvailable) {
-        console.log(`❌ Color "${color}" is not available for size "${sizeDetail.value}"`);
-        continue;
-      }
-      
-      if (capturedColors.has(color)) {
-        console.log(`✅ Color "${color}" already captured, skipping`);
-        continue;
-      }
-      
-      if (failedColors.has(color)) {
-        console.log(`❌ Color "${color}" previously failed, skipping`);
-        continue;
-      }
-      
-      try {
-        console.log(`🎨 Attempting to capture color: ${color}`);
-        const { checkedColor, image } = await clickColorAndResolveVariant(page, labelLocator, color);
+          // Try to capture images for colors we haven't captured yet and haven't failed
+      for (const colorDetail of availableColors) {
+        const { value: color, labelLocator, isAvailable } = colorDetail;
         
-        if (image) {
-          images.push({ color: checkedColor, image });
-          capturedColors.add(color);
-          console.log(`✅ Successfully captured color: ${checkedColor}`);
-        } else {
-          console.log(`⚠️ No image found for color: ${color}, marking as failed`);
-          failedColors.add(color);
+        if (!isAvailable) {
+          console.log(`❌ Color "${color}" is not available for size "${sizeDetail.value}"`);
+          continue;
         }
-      } catch (error) {
-        console.warn(`❌ Failed to capture color "${color}":`, error.message);
-        failedColors.add(color);
-        // If image change detection failed, skip this color
-        if (error.message.includes('Image change detection')) {
-          console.log(`⚠️ Skipping color "${color}" due to image change detection failure`);
+        
+        if (capturedColors.has(color)) {
+          console.log(`✅ Color "${color}" already captured, skipping`);
+          continue;
+        }
+        
+        if (failedColors.has(color)) {
+          console.log(`❌ Color "${color}" previously failed, skipping`);
+          continue;
+        }
+        
+        try {
+          console.log(`🎨 Attempting to capture color: ${color}`);
+          const { checkedColor, image } = await clickColorAndResolveVariant(page, labelLocator, color);
+          
+          if (image) {
+            images.push({ color: checkedColor, image: normalizeShopifyImage(image, CONFIG.IMAGE_SIZE) });
+            capturedColors.add(color);
+            console.log(`✅ Successfully captured color: ${checkedColor}`);
+          } else {
+            console.log(`⚠️ No image found for color: ${color}, marking as failed`);
+            failedColors.add(color);
+          }
+        } catch (error) {
+          console.warn(`❌ Failed to capture color "${color}"`, error.message);
+          failedColors.add(color);
+          // If image change detection failed, skip this color
+          if (error.message.includes('Image change detection')) {
+            console.log(`⚠️ Skipping color "${color}" due to image change detection failure`);
+          }
         }
       }
-    }
     
     // Check if we've processed all possible colors (captured + failed = total)
     const processedColors = capturedColors.size + failedColors.size;
@@ -1016,7 +1018,7 @@ async function captureImagesForOneColorOneSize(page, variantDetails, sizeDetails
     );
     
     if (mainImage) {
-      images.push({ color, image: mainImage });
+      images.push({ color, image: normalizeShopifyImage(mainImage, CONFIG.IMAGE_SIZE) });
       console.log(`✅ Captured main image for ${color} - ${size}`);
       
       // Capture additional thumbnail images
@@ -1081,7 +1083,7 @@ async function captureImagesForOneColorMultipleSizes(page, variantDetails, sizeD
       );
       
       if (mainImage) {
-        images.push({ color, image: mainImage });
+        images.push({ color, image: normalizeShopifyImage(mainImage, CONFIG.IMAGE_SIZE) });
         console.log(`✅ Captured main image for size ${sizeDetail.value}`);
         
         // Capture additional thumbnail images for this size
@@ -1155,7 +1157,7 @@ async function captureImagesForMultipleColorsOneSize(page, variantDetails, sizeD
         );
         
         if (image) {
-          images.push({ color: checkedColor, image });
+          images.push({ color: checkedColor, image: normalizeShopifyImage(image, CONFIG.IMAGE_SIZE) });
           console.log(`✅ Captured image for color: ${checkedColor}`);
         } else {
           console.warn(`⚠️ No image captured for color: ${color}`);
@@ -1237,7 +1239,7 @@ async function captureImagesForMultipleColorsMultipleSizes(page, variantDetails,
         const { checkedColor, image } = await clickColorAndResolveVariant(page, labelLocator, color);
         
         if (image) {
-          images.push({ color: checkedColor, image });
+          images.push({ color: checkedColor, image: normalizeShopifyImage(image, CONFIG.IMAGE_SIZE) });
           capturedColors.add(color);
           console.log(`✅ Successfully captured color: ${checkedColor}`);
         } else {
