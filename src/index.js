@@ -27,7 +27,7 @@ const PRODUCT_URLS = [
     scrapedAt: "2025-08-19T05:02:48.761Z",
   },
   {
-    url: "https://shop.simon.com/products/venice-navy-blue-suede-mens-belt?crpid=7327923273788&cid=adClick:collection",
+    url: "https://shop.simon.com/products/vintage-reversible-brown-navy-mens-belt?crpid=7327926779964",
     status: "accepted",
     reason: "Meets all criteria",
     brand: "Vella Pais",

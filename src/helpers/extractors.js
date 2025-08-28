@@ -41,7 +41,7 @@ const CONFIG = {
 const SELECTORS = {
   TITLE: "h1.product-single__title",
   DESCRIPTION: ".pdp-details-txt",
-  COMPARE_PRICE: "span.product__price--compare",
+  COMPARE_PRICE: "span.product__price",
   COLOR_FIELDSET: 'fieldset[name="Color"]',
   SIZE_OPTIONS: [
     'fieldset.variant-input-wrap[data-index="option1"] .variant-input[data-index="option1"][data-value]',
